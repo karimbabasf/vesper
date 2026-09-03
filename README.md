@@ -29,7 +29,8 @@ description of it. Step 1 ships `vesper.web`.
 
 ## Status
 
-Design approved. Step 0 (venue verification) and step 1 (the order builder) are done.
+Design approved. Steps 0 (venue verification), 1 (the order builder) and 2 (the contracts) are
+done.
 
 ## How to run it
 
@@ -71,6 +72,27 @@ cd enclave && .venv/bin/python -m vesper.web
 
 Two panels: what the model returned, and what the gate did with it. Six examples to click,
 including ones that should produce nothing. Standard library only, no build step.
+
+## The contracts
+
+`VoicePolicy` is an ERC-7579 validator module: about forty lines decide whether any of this is safe.
+`VoiceOrderGate` is the only address it will let an account call, and exists so the full CoW order
+travels in the calldata where the validator can read it.
+
+```bash
+cd contracts && forge test
+```
+
+The completion criterion is not "the tests pass". It is that **every check has a test that fails
+when you delete that check**, which is a claim you can run:
+
+```bash
+cd contracts && python3 script/mutation_report.py
+```
+
+It replaces each guard with an empty block, runs the suite, and puts the guard back. The result is
+in [contracts/mutation-report.md](contracts/mutation-report.md). Two checks cannot be caught and the
+report says why, with the argument, rather than leaving them out.
 
 ## How to test it
 
