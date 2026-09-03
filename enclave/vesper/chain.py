@@ -11,6 +11,7 @@ the enclave at boot and never written anywhere, which is the whole point of step
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import urllib.error
@@ -18,7 +19,9 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-RPC = "https://mainnet.base.org"
+# Point VESPER_RPC at `anvil --fork-url https://mainnet.base.org` to rehearse the whole path,
+# including the transactions, without spending anything.
+RPC = os.environ.get("VESPER_RPC", "https://mainnet.base.org")
 COW_API = "https://api.cow.fi/base/api/v1"
 ENTRY_POINT = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 SETTLEMENT = "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
@@ -60,7 +63,10 @@ def env(path: Path) -> dict[str, str]:
     return values
 
 
-CONTRACTS_ENV = Path(__file__).resolve().parents[2] / "contracts" / ".env"
+CONTRACTS_ENV = Path(
+    os.environ.get("VESPER_CONTRACTS_ENV")
+    or Path(__file__).resolve().parents[2] / "contracts" / ".env"
+)
 
 
 def cast(*args: str) -> str:

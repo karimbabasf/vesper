@@ -115,6 +115,22 @@ cd contracts && FOUNDRY_PROFILE=live forge test --match-path test/Live.t.sol
 It needs the network and it needs `cast` on your path. Nothing gets deployed with real money until
 it passes there.
 
+Going live is one script, and it can be rehearsed in full first. Start a local fork, give the owner
+some pretend gas, and run the whole thing against that:
+
+```bash
+anvil --fork-url https://mainnet.base.org --port 8546
+```
+
+```bash
+cd contracts && RPC=http://127.0.0.1:8546 SKIP_FORK_SUITE=1 bash script/go-live.sh
+```
+
+It deploys, sweeps whatever the previous account held into the new one, sets the limits and the
+floors and the session key, and then reads every one of those back off the chain. Drop the `RPC` and
+`SKIP_FORK_SUITE` to do it for real. The enclave takes the same treatment: `VESPER_RPC` points
+`vesper.chain` at the fork, so a whole trade can be placed and checked without spending anything.
+
 Four independent reviews went at these contracts before deployment. What they found, what was
 changed, and what is accepted with the reason: [docs/audit-2026-09-03.md](docs/audit-2026-09-03.md).
 

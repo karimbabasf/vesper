@@ -13,8 +13,10 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-RPC=https://mainnet.base.org
-ENV_FILE=.env
+# Override both to rehearse the whole thing against `anvil --fork-url https://mainnet.base.org`
+# before spending anything. That is what the dry run in the README does.
+RPC=${RPC:-https://mainnet.base.org}
+ENV_FILE=${ENV_FILE:-.env}
 
 set -a && . "$ENV_FILE" && set +a
 OWNER=$(cast wallet address --private-key "$PRIVATE_KEY")
@@ -23,10 +25,12 @@ echo "owner    $OWNER"
 echo "balance  $(cast balance "$OWNER" --rpc-url $RPC --ether) ETH"
 echo
 
-echo "== fork suite =="
-FOUNDRY_PROFILE=live forge test --match-path test/Live.t.sol >/dev/null
-echo "passed, so the path works against the deployed contracts"
-echo
+if [ "${SKIP_FORK_SUITE:-}" != "1" ]; then
+  echo "== fork suite =="
+  FOUNDRY_PROFILE=live forge test --match-path test/Live.t.sol >/dev/null
+  echo "passed, so the path works against the deployed contracts"
+  echo
+fi
 
 echo "== deploy =="
 OUT=$(forge script script/Deploy.s.sol --rpc-url $RPC --broadcast 2>&1)
