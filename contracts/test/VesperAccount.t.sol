@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {GPv2Order, MAX_ORDER_LIFETIME, PackedUserOperation, SIG_FAIL, SIG_OK} from "../src/Types.sol";
 import {VesperAccount} from "../src/VesperAccount.sol";
 import {VoicePolicy} from "../src/VoicePolicy.sol";
-import {Fixtures, MockSettlement, PEPE, USDC, WETH} from "./Fixtures.sol";
+import {BASE_DOMAIN_SEPARATOR, Fixtures, MockSettlement, PEPE, USDC, WETH} from "./Fixtures.sol";
 import {Passkey} from "./Passkey.sol";
 
 contract VesperAccountTest is Test {
@@ -124,6 +124,34 @@ contract VesperAccountTest is Test {
         address ownerInUid;
         assembly { ownerInUid := shr(96, mload(add(uid, 64))) }
         assertEq(ownerInUid, address(account));
+    }
+
+    /// @dev The same order and the same uid as test_the_order_uid_matches_the_value_solidity
+    ///      _produces in the enclave suite. The enclave builds this to ask whether an order is
+    ///      armed and the contract builds it to arm one, so the two agreeing is load bearing and
+    ///      the constant is written down on both sides rather than derived twice from one place.
+    function test_the_uid_matches_the_value_the_enclave_builds() public pure {
+        GPv2Order.Data memory order = GPv2Order.Data({
+            sellToken: WETH,
+            buyToken: USDC,
+            receiver: 0x8F54eaF529124254DF304D369ADcE6c84E838747,
+            sellAmount: 1_000_000_000_000_000,
+            buyAmount: 2_400_000,
+            validTo: 1_800_000_000,
+            appData: bytes32(0),
+            feeAmount: 0,
+            kind: GPv2Order.KIND_SELL,
+            partiallyFillable: false,
+            sellTokenBalance: GPv2Order.BALANCE_ERC20,
+            buyTokenBalance: GPv2Order.BALANCE_ERC20
+        });
+
+        assertEq(
+            GPv2Order.uid(
+                order, BASE_DOMAIN_SEPARATOR, 0x8F54eaF529124254DF304D369ADcE6c84E838747
+            ),
+            hex"c144da4e37238c28eb1b02160a3135cef11d503ebfa377585fae5e4bcae929658f54eaf529124254df304d369adce6c84e8387476b49d200"
+        );
     }
 
     function test_a_stranger_cannot_place_an_order() public {

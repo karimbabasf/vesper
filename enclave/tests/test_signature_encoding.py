@@ -66,3 +66,30 @@ def test_real_client_data_round_trips_through_cast_decode():
     assert "55" * 32 in decoded
     assert "66" * 32 in decoded
     assert "true" in decoded
+
+
+def test_the_order_uid_matches_the_value_solidity_produces():
+    """One order, one uid, pinned on both sides of the language boundary.
+
+    The enclave builds the uid to ask the settlement whether an order is armed, and the contract
+    builds it to arm one. If the two ever disagree the console reports a perfectly good trade as
+    unarmed, which is the kind of failure that sends you looking in the wrong place. The same
+    constant is asserted in contracts/test/VesperAccount.t.sol.
+    """
+    from vesper.chain import order_uid
+
+    order = {
+        "sellToken": "0x4200000000000000000000000000000000000006",
+        "buyToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "receiver": "0x8F54eaF529124254DF304D369ADcE6c84E838747",
+        "sellAmount": "1000000000000000",
+        "buyAmount": "2400000",
+        "validTo": 1800000000,
+        "appData": "0x" + "00" * 32,
+        "feeAmount": "0",
+    }
+    assert order_uid(order, "0x8F54eaF529124254DF304D369ADcE6c84E838747") == (
+        "0xc144da4e37238c28eb1b02160a3135cef11d503ebfa377585fae5e4bcae92965"
+        "8f54eaf529124254df304d369adce6c84e838747"
+        "6b49d200"
+    )
