@@ -258,6 +258,10 @@ contract VoicePolicy is IValidator {
         ) return false;
         if (order.receiver != account) return false;
         if (order.buyAmount == 0) return false;
+        // address(0) is the key the ether budget is kept under, so an order naming it as a token
+        // would have its token spend and its gas spend written to the same slot, and the second
+        // write would erase the first. It is not an ERC-20 either way.
+        if (order.sellToken == ETH || order.buyToken == ETH) return false;
         // The settlement takes sellAmount + feeAmount from the account for a fill-or-kill sale, so
         // a cap that reads only sellAmount is not a cap. Refused rather than added to the total:
         // a non-zero fee is never legitimate, and a comparison cannot overflow.

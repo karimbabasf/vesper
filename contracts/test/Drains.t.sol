@@ -316,6 +316,24 @@ contract DrainsTest is Test {
         assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(order), ""))), SIG_FAIL);
     }
 
+    /// @dev The ether budget lives at address(0). An order naming address(0) as a token records
+    ///      twice into that one slot, and the second write erases the first, so the trade is not
+    ///      counted. Refused before it can happen.
+    function test_refuses_an_order_naming_the_ether_budgets_own_key_as_a_token() public {
+        vm.startPrank(account);
+        policy.setFloor(address(0), WETH, 1);
+        policy.setFloor(USDC, address(0), 1);
+        vm.stopPrank();
+
+        GPv2Order.Data memory selling = Fixtures.order(account, address(0), WETH, 1_000e6);
+        assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(selling), ""))), SIG_FAIL);
+
+        GPv2Order.Data memory buying = Fixtures.order(account, USDC, address(0), 1_000e6);
+        assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(buying), ""))), SIG_FAIL);
+
+        assertEq(policy.remainingToday(account, USDC), DAILY);
+    }
+
     function test_refuses_a_token_sold_for_itself_even_when_that_pair_is_priced() public {
         vm.prank(account);
         policy.setFloor(USDC, USDC, 1);

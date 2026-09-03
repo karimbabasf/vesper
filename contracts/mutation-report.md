@@ -3,7 +3,7 @@
 Each check below was replaced with an empty block and the suite was run. `caught` means a
 test failed, which is the only evidence that the check is doing anything.
 
-51 of 52 checks are caught by a test. 1 cannot be, with reasons below.
+52 of 53 checks are caught by a test. 1 cannot be, with reasons below.
 
 | File | Line | Check | Result |
 |---|---|---|---|
@@ -30,14 +30,15 @@ test failed, which is the only evidence that the check is doing anything.
 | `src/VoicePolicy.sol` | 258 | `) return false;` | caught |
 | `src/VoicePolicy.sol` | 259 | `if (order.receiver != account) return false;` | caught |
 | `src/VoicePolicy.sol` | 260 | `if (order.buyAmount == 0) return false;` | caught |
-| `src/VoicePolicy.sol` | 264 | `if (order.feeAmount != 0) return false;` | caught |
-| `src/VoicePolicy.sol` | 266 | `if (order.sellToken == order.buyToken) return false;` | caught |
-| `src/VoicePolicy.sol` | 268 | `if (order.validTo <= block.timestamp) return false;` | caught |
-| `src/VoicePolicy.sol` | 269 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) return false;` | caught |
-| `src/VoicePolicy.sol` | 284 | `if (!_validSessionSignature(opHash, sessionSig, key)) return false;` | caught |
-| `src/VoicePolicy.sol` | 286 | `if (!hasAssertion) return false;` | caught |
-| `src/VoicePolicy.sol` | 328 | `if (signature.length != 65) return false;` | caught |
-| `src/VoicePolicy.sol` | 339 | `return false;` | caught |
+| `src/VoicePolicy.sol` | 264 | `if (order.sellToken == ETH || order.buyToken == ETH) return false;` | caught |
+| `src/VoicePolicy.sol` | 268 | `if (order.feeAmount != 0) return false;` | caught |
+| `src/VoicePolicy.sol` | 270 | `if (order.sellToken == order.buyToken) return false;` | caught |
+| `src/VoicePolicy.sol` | 272 | `if (order.validTo <= block.timestamp) return false;` | caught |
+| `src/VoicePolicy.sol` | 273 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) return false;` | caught |
+| `src/VoicePolicy.sol` | 288 | `if (!_validSessionSignature(opHash, sessionSig, key)) return false;` | caught |
+| `src/VoicePolicy.sol` | 290 | `if (!hasAssertion) return false;` | caught |
+| `src/VoicePolicy.sol` | 332 | `if (signature.length != 65) return false;` | caught |
+| `src/VoicePolicy.sol` | 343 | `return false;` | caught |
 | `src/VesperAccount.sol` | 65 | `) revert ZeroAddress();` | caught |
 | `src/VesperAccount.sol` | 82 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
 | `src/VesperAccount.sol` | 107 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
