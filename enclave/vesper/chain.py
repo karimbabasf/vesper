@@ -242,6 +242,23 @@ def presign(order: dict, deployment: Deployment, assertion: dict | None = None) 
     return json.loads(receipt)
 
 
+def cancel(uid: str, deployment: Deployment) -> dict:
+    """Disarm an order that is already presigned.
+
+    Revoking the session key stops new orders and does nothing to armed ones: a presignature is an
+    instruction a solver may still act on until validTo. This is the other half of the kill switch,
+    and it goes through the owner rather than the fence, because the fence has no authority over an
+    order that already exists.
+    """
+    disarm = cast("calldata", "setPreSignature(bytes,bool)", uid, "false")
+    receipt = cast(
+        "send", deployment.account, "ownerCall(address,uint256,bytes)(bytes)",
+        SETTLEMENT, "0", disarm,
+        "--private-key", deployment.owner_key, "--rpc-url", RPC, "--json",
+    )
+    return json.loads(receipt)
+
+
 def presigned(uid: str) -> bool:
     """Ask the settlement contract directly. The only answer that counts."""
     result = cast(

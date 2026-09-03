@@ -183,7 +183,25 @@ def place(request: dict) -> dict:
         receipt.append(str(error)[:400])
         return {"ok": False, "receipt": receipt, "budget": budget()["budget"]}
 
-    return {"ok": True, "receipt": receipt, "budget": budget()["budget"]}
+    return {"ok": True, "receipt": receipt, "uid": uid, "budget": budget()["budget"]}
+
+
+def disarm(request: dict) -> dict:
+    """Take back a presignature. The only thing that stops an order a solver has not filled yet."""
+    live = deployment()
+    if live is None:
+        return {"ok": False, "receipt": ["No account deployed."]}
+
+    uid = request["uid"]
+    result = chain.cancel(uid, live)
+    still = chain.presigned(uid)
+    return {
+        "ok": not still,
+        "receipt": [
+            f"tx {result.get('transactionHash', '?')}",
+            "the settlement has let it go" if not still else "still armed, which should not happen",
+        ],
+    }
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -216,7 +234,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self) -> None:
-        routes = {"/read": lambda body: read(body["instruction"]), "/place": place}
+        routes = {
+            "/read": lambda body: read(body["instruction"]),
+            "/place": place,
+            "/disarm": disarm,
+        }
         handler = routes.get(self.path)
         if handler is None:
             self._send(404, b"not found", "text/plain")

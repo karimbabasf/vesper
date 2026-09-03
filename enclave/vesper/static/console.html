@@ -219,6 +219,11 @@
   </div>
 
   <div class="receipt" id="receipt"></div>
+  <div class="place" hidden id="after">
+    <button type="button" id="disarm">Take it back</button>
+    <span class="hint">A presignature stands until it fills or expires. Revoking the session key
+    does not touch it.</span>
+  </div>
 </main>
 
 <script>
@@ -248,6 +253,7 @@
       said.textContent = 'waiting';
     });
     el('place').hidden = true;
+    el('after').hidden = true;
     el('receipt').textContent = '';
     ready = null;
   }
@@ -358,7 +364,25 @@
       : 'Nothing left the account.';
     el('receipt').innerHTML = body.receipt.map(escape).join('<br>');
     if (body.budget) paintBudget(body.budget);
+    if (body.ok && body.uid) {
+      placed = body.uid;
+      el('after').hidden = false;
+    }
   }
+
+  let placed = null;
+  el('disarm').addEventListener('click', async () => {
+    const button = el('disarm');
+    button.disabled = true;
+    button.textContent = 'Taking it back';
+    const response = await fetch('/disarm', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ uid: placed }),
+    });
+    const body = await response.json();
+    button.textContent = body.ok ? 'Taken back' : 'Still armed';
+    el('receipt').innerHTML += '<br>' + body.receipt.map(escape).join('<br>');
+  });
 
   hold.addEventListener('pointerdown', (event) => {
     hold.setPointerCapture(event.pointerId);

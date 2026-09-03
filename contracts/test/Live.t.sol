@@ -118,6 +118,36 @@ contract LiveTest is Test {
         IEntryPoint(ENTRY_POINT).handleOps(ops, payable(owner));
     }
 
+    /// @dev The other half of the kill switch. Revoking the session key stops new orders and does
+    ///      nothing to one already armed, so the owner has to be able to take the signature back.
+    ///      The settlement accepts that from the account, for the same reason it accepted the
+    ///      signature: the account is the owner named in the uid.
+    function test_the_owner_can_take_an_armed_order_back() public {
+        GPv2Order.Data memory order = _order(FACE_ABOVE);
+        bytes memory uid = _uid(order);
+        _run(order, "");
+        assertTrue(ISettlement(SETTLEMENT).preSignature(uid) != 0, "never armed");
+
+        vm.prank(owner);
+        account.ownerCall(
+            SETTLEMENT, 0, abi.encodeCall(ISettlement.setPreSignature, (uid, false))
+        );
+
+        assertEq(ISettlement(SETTLEMENT).preSignature(uid), 0, "still armed");
+    }
+
+    /// @dev Revoking on its own is not enough, and this is the test that says so out loud.
+    function test_revoking_the_session_key_leaves_an_armed_order_armed() public {
+        GPv2Order.Data memory order = _order(FACE_ABOVE);
+        bytes memory uid = _uid(order);
+        _run(order, "");
+
+        vm.prank(address(account));
+        policy.revoke();
+
+        assertTrue(ISettlement(SETTLEMENT).preSignature(uid) != 0, "revoke disarmed it after all");
+    }
+
     // --- step 4: the passkey, against the real precompile --------------------------------------
 
     /// @dev Base answers 1 for a signature we just made, and nothing at all for the same
