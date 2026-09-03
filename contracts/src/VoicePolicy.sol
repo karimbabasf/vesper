@@ -130,6 +130,11 @@ contract VoicePolicy is IValidator {
         if (key == address(0)) return SIG_FAIL;
         if (block.timestamp > expiry) return SIG_FAIL; // the key has aged out
 
+        // The settlement takes sellAmount + feeAmount from the account, so a cap that reads only
+        // sellAmount is not a cap. Refused outright rather than added to the total: a non-zero fee
+        // is never legitimate here, and a comparison cannot overflow where an addition can.
+        if (order.feeAmount != 0) return SIG_FAIL;
+
         Limits memory sellLimits = limits[op.sender][order.sellToken];
         if (!sellLimits.allowed) return SIG_FAIL;
         if (!limits[op.sender][order.buyToken].allowed) return SIG_FAIL;
@@ -137,9 +142,9 @@ contract VoicePolicy is IValidator {
         // Per trade before daily, and not only for readability: passing this bounds sellAmount by
         // a uint128, which is what keeps the sum on the next line from overflowing.
         if (order.sellAmount > sellLimits.perTradeCap) return SIG_FAIL;
-        if (_spentToday(op.sender, order.sellToken) + order.sellAmount > sellLimits.dailyCap) {
-            return SIG_FAIL;
-        }
+        // Read once and carried to _recordSpend below, rather than loading the same slot twice.
+        uint256 spent = _spentToday(op.sender, order.sellToken);
+        if (spent + order.sellAmount > sellLimits.dailyCap) return SIG_FAIL;
 
         (bytes memory sessionSig, bool hasAssertion, Assertion memory assertion) =
             _decodeSignature(op.signature);
@@ -160,7 +165,7 @@ contract VoicePolicy is IValidator {
             ) return SIG_FAIL;
         }
 
-        _recordSpend(op.sender, order.sellToken, uint128(order.sellAmount));
+        _recordSpend(op.sender, order.sellToken, spent, uint128(order.sellAmount));
         return SIG_OK;
     }
 
@@ -174,9 +179,11 @@ contract VoicePolicy is IValidator {
         expiry = session.expiry;
     }
 
-    /// @dev A malformed blob reverts here rather than returning SIG_FAIL. Only the account can
-    ///      reach this line, and the account only ever carries what its own signer produced, so
-    ///      the difference is visible to the operator and to nobody else.
+    /// @dev A malformed blob reverts here rather than returning SIG_FAIL. handleOps is
+    ///      permissionless, so a stranger can make that happen by submitting a deliberately
+    ///      broken operation, and it costs them their own gas to revert their own transaction.
+    ///      Nothing is recorded and nothing executes, so the two outcomes differ only in how the
+    ///      failure is reported.
     function _decodeSignature(bytes calldata signature)
         internal
         pure
@@ -210,19 +217,33 @@ contract VoicePolicy is IValidator {
         return recovered != address(0) && recovered == key;
     }
 
+    uint256 internal constant WINDOW = 1 days;
+
+    /// @dev The budget drains back in a straight line rather than refilling all at once.
+    ///
+    /// A window that resets hands out twice the cap either side of a boundary: spend it all at
+    /// 23:59:59, spend it all again at 00:00:00. That is two seconds, and it is exactly the shape
+    /// of a stolen key being emptied. Draining the recorded spend in proportion to the time since
+    /// it happened removes the edge: the moment after the cap is used the budget is zero and it
+    /// comes back gradually. One multiply and one divide.
+    ///
+    /// It is not a true rolling sum, which would need per-trade history. The property it does give
+    /// is a bound on rate, and that is the property worth paying for.
     function _spentToday(address account, address token) internal view returns (uint256) {
         Spend memory spend = spends[account][token];
-        if (block.timestamp >= uint256(spend.windowStart) + 1 days) return 0;
-        return spend.amount;
+        uint256 elapsed = block.timestamp - spend.windowStart;
+        if (elapsed >= WINDOW) return 0;
+        // spend.amount is a uint128 and the factor is under 2^17, so this cannot overflow.
+        return (uint256(spend.amount) * (WINDOW - elapsed)) / WINDOW;
     }
 
-    function _recordSpend(address account, address token, uint128 amount) internal {
-        Spend storage spend = spends[account][token];
-        if (block.timestamp >= uint256(spend.windowStart) + 1 days) {
-            spends[account][token] = Spend(amount, uint48(block.timestamp));
-        } else {
-            spend.amount += amount;
-        }
+    /// @param drained What _spentToday already said, passed in so the slot is read once.
+    function _recordSpend(address account, address token, uint256 drained, uint128 amount)
+        internal
+    {
+        // The remainder that has not drained yet, plus what was just spent. Bounded by dailyCap
+        // plus one trade, both uint128, so the sum fits and the cast cannot truncate.
+        spends[account][token] = Spend(uint128(drained) + amount, uint48(block.timestamp));
     }
 
     // --- ERC-7579 plumbing -----------------------------------------------------------------

@@ -29,7 +29,7 @@ contract VoicePolicyTest is Test {
         policy.registerSession(
             sessionKey,
             keccak256("approved image"),
-            uint48(block.timestamp + 1 days),
+            uint48(block.timestamp + 30 days),
             Passkey.RP_ID_HASH,
             Passkey.PUBKEY_X,
             Passkey.PUBKEY_Y
@@ -70,7 +70,7 @@ contract VoicePolicyTest is Test {
     }
 
     function test_refuses_once_the_session_key_has_aged_out() public {
-        vm.warp(block.timestamp + 2 days);
+        vm.warp(block.timestamp + 31 days);
 
         assertEq(_validate(_op(USDC, WETH, 1_000e6)), SIG_FAIL);
     }
@@ -190,6 +190,52 @@ contract VoicePolicyTest is Test {
         assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(order), ""))), SIG_FAIL);
     }
 
+    /// @dev A fee is sell-side value leaving the account that no cap counted and no face saw.
+    ///      One wei of sellAmount passes every limit while the fee empties the balance.
+    function test_refuses_an_order_whose_fee_the_caps_would_not_see() public {
+        GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 1);
+        order.feeAmount = 100_000e6;
+
+        assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(order), ""))), SIG_FAIL);
+    }
+
+    /// @dev What the cap actually promises. A window that resets hands out the whole cap again
+    ///      one second after it ran out, if that second happens to cross the boundary, and a
+    ///      stolen key would take both halves two seconds apart. Draining means the budget only
+    ///      ever returns as fast as time passes, so no short interval carries more than one cap.
+    function test_the_whole_cap_cannot_be_spent_twice_in_a_moment() public {
+        _spendTheWholeCap();
+        assertEq(policy.remainingToday(account, USDC), 0);
+
+        vm.warp(block.timestamp + 1);
+        assertEq(_validate(_op(USDC, WETH, FACE_ABOVE)), SIG_FAIL);
+
+        // A day later it is back, which is the other half of the promise.
+        vm.warp(block.timestamp + 1 days);
+        assertEq(_validate(_op(USDC, WETH, FACE_ABOVE)), SIG_OK);
+    }
+
+    /// @dev Proportional the whole way, never in a step. A resetting window reads zero here and
+    ///      then jumps, which is the shape this replaces.
+    function test_the_budget_comes_back_in_proportion_to_the_time_that_has_passed() public {
+        _spendTheWholeCap();
+
+        vm.warp(block.timestamp + 6 hours);
+        assertEq(policy.remainingToday(account, USDC), DAILY / 4);
+
+        vm.warp(block.timestamp + 6 hours);
+        assertEq(policy.remainingToday(account, USDC), DAILY / 2);
+
+        vm.warp(block.timestamp + 12 hours);
+        assertEq(policy.remainingToday(account, USDC), DAILY);
+    }
+
+    function _spendTheWholeCap() private {
+        for (uint256 i = 0; i < 10; i++) {
+            assertEq(_validate(_op(USDC, WETH, FACE_ABOVE)), SIG_OK);
+        }
+    }
+
     // --- the signatures ---------------------------------------------------------------------
 
     function test_refuses_a_signature_from_a_key_that_is_not_the_session_key() public {
@@ -274,6 +320,19 @@ contract VoicePolicyTest is Test {
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
     }
 
+    /// @dev The length check used to be belt and braces, catching only what a later check would
+    ///      have caught anyway. It stopped being that when the rpIdHash comparison started reading
+    ///      the first word straight out of memory: with the check gone, that read runs off the end
+    ///      of a short array. This assertion is valid in every other respect, so nothing else can
+    ///      refuse it.
+    function test_refuses_authenticator_data_one_byte_short_of_the_minimum() public {
+        GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
+        Assertion memory assertion =
+            Passkey.assertionWithAuthenticatorDataOneByteShort(keccak256(abi.encode(order)));
+
+        assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
+    }
+
     /// @dev A registration ceremony is signed the same way an assertion is. Without the type check
     ///      a signature the holder made to create the credential would place a trade.
     function test_refuses_a_ceremony_that_is_not_an_assertion() public {
@@ -300,6 +359,22 @@ contract VoicePolicyTest is Test {
         assertion.challengeIndex = 10_000;
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
+    }
+
+    /// @dev The encoder was rewritten for gas, so it gets an oracle rather than a spot check.
+    ///      Any disagreement with vm.toBase64URL is a challenge check that would refuse a real
+    ///      passkey, or worse, accept the wrong one.
+    ///      vm.toBase64URL pads to a multiple of four; WebAuthn does not, and neither do we, so
+    ///      the reference gets its one '=' trimmed before the comparison.
+    function testFuzz_the_encoder_agrees_with_the_reference(bytes32 value) public pure {
+        bytes memory padded = bytes(vm.toBase64URL(abi.encodePacked(value)));
+        assertEq(padded.length, 44);
+        assertEq(padded[43], "=");
+
+        bytes memory unpadded = new bytes(43);
+        for (uint256 i = 0; i < 43; i++) unpadded[i] = padded[i];
+
+        assertEq(Passkey.base64url(abi.encodePacked(value)), string(unpadded));
     }
 
     /// @dev Pins the encoder the challenge check depends on, against a value computed outside

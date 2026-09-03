@@ -24,7 +24,6 @@ ffi = true
 # Profiles inherit from default, so the exclusion above has to be lifted here by hand.
 no_match_path = "test/nothing"
 fs_permissions = [{ access = "read", path = "./script" }]
-# Base has the RIP-7212 P-256 precompile at 0x100; foundry's EVM does not turn it on by default,
-# and without this the passkey path silently fails closed in the fork exactly as it would on a
-# chain that lacks it. Verified separately against live Base: the same signature returns 1 there.
-odyssey = true
+# Note for whoever runs this next: foundry 1.7.1 has no RIP-7212 precompile and no flag to turn
+# one on, so a fork of Base does not carry the one thing the passkey path needs. Live.t.sol asks
+# the deployed precompile over RPC and replays its answer. See _teachTheForkWhatBaseSays.

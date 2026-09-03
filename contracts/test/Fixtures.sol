@@ -42,9 +42,10 @@ contract MockSettlement is ISettlement {
 
 /// @notice Builders shared by the suites.
 library Fixtures {
+    /// @dev validTo sits inside VesperAccount.MAX_ORDER_LIFETIME, which is what a real one does.
     function order(address account, address sellToken, address buyToken, uint256 sellAmount)
         internal
-        pure
+        view
         returns (GPv2Order.Data memory)
     {
         return GPv2Order.Data({
@@ -53,7 +54,7 @@ library Fixtures {
             receiver: account,
             sellAmount: sellAmount,
             buyAmount: 1, // any non-zero floor
-            validTo: 2_000_000_000,
+            validTo: uint32(block.timestamp + 10 minutes),
             appData: bytes32(0),
             feeAmount: 0,
             kind: GPv2Order.KIND_SELL,

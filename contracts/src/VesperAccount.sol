@@ -33,9 +33,23 @@ contract VesperAccount is IVesperAccount {
     error PartialFillsNotSupported();
     error ReceiverMustBeTheAccount();
     error NoFloor();
+    error FeeMustBeZero();
+    error ArmedTooLong();
     error CallFailed(bytes reason);
 
-    event OrderPlaced(bytes32 indexed orderDigest, address sellToken, uint256 sellAmount, uint256 floor);
+    /// @dev The uid is emitted whole because it is what cancelling takes, and this is the only
+    ///      place it exists. To disarm an order: ownerCall(settlement, 0, setPreSignature(uid,
+    ///      false)). Revoking the session key stops new orders and does nothing to armed ones.
+    event OrderPlaced(
+        bytes orderUid, address sellToken, uint256 sellAmount, uint256 floor, uint32 validTo
+    );
+
+    /// @dev A presignature is an armed instruction that a solver may act on at any point before
+    ///      validTo, and the fence meters orders as they are created rather than as they settle.
+    ///      Without a ceiling, a day's worth of caps can be armed and then all settled at once,
+    ///      and a uint32 validTo reaches the year 2106. Thirty minutes is six times the deadline
+    ///      the enclave asks for, so nothing legitimate touches it.
+    uint256 public constant MAX_ORDER_LIFETIME = 30 minutes;
 
     constructor(address entryPoint_, IValidator validator_, address owner_, ISettlement settlement_) {
         entryPoint = entryPoint_;
@@ -93,11 +107,21 @@ contract VesperAccount is IVesperAccount {
         // buyAmount is the floor spoken out loud. Zero would let a solver fill at any price.
         if (order.buyAmount == 0) revert NoFloor();
 
-        bytes32 orderDigest = GPv2Order.hash(order, domainSeparator);
-        orderUid = abi.encodePacked(orderDigest, address(this), order.validTo);
+        // The settlement takes sellAmount + feeAmount from this account for a fill-or-kill sale,
+        // and the fence only ever counted sellAmount. A fee is therefore sell-side value leaving
+        // that nothing quoted, nothing capped and no face approved. CoW takes its fee inside the
+        // price now and refuses an order that carries one, so zero is also the only value that
+        // gets filled.
+        if (order.feeAmount != 0) revert FeeMustBeZero();
+
+        if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) revert ArmedTooLong();
+
+        orderUid = abi.encodePacked(GPv2Order.hash(order, domainSeparator), address(this), order.validTo);
         settlement.setPreSignature(orderUid, true);
 
-        emit OrderPlaced(orderDigest, order.sellToken, order.sellAmount, order.buyAmount);
+        emit OrderPlaced(
+            orderUid, order.sellToken, order.sellAmount, order.buyAmount, order.validTo
+        );
     }
 
     /// @notice The way out. The validator never sees this, and it is the reason a burner is safe

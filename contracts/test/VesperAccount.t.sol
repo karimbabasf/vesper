@@ -127,6 +127,34 @@ contract VesperAccountTest is Test {
         account.placeOrder(order);
     }
 
+    /// @dev The settlement takes sellAmount + feeAmount for a fill-or-kill sale, and the fence
+    ///      only ever counted sellAmount. Without this a one wei trade drains the account.
+    function test_refuses_an_order_carrying_a_fee() public {
+        GPv2Order.Data memory order = Fixtures.order(address(account), USDC, WETH, 1);
+        order.feeAmount = 100_000e6;
+
+        vm.prank(entryPoint);
+        vm.expectRevert(VesperAccount.FeeMustBeZero.selector);
+        account.placeOrder(order);
+    }
+
+    function test_refuses_an_order_armed_for_longer_than_the_ceiling() public {
+        GPv2Order.Data memory order = Fixtures.order(address(account), USDC, WETH, 1_000e6);
+        order.validTo = uint32(block.timestamp + account.MAX_ORDER_LIFETIME() + 1);
+
+        vm.prank(entryPoint);
+        vm.expectRevert(VesperAccount.ArmedTooLong.selector);
+        account.placeOrder(order);
+    }
+
+    function test_accepts_an_order_armed_right_up_to_the_ceiling() public {
+        GPv2Order.Data memory order = Fixtures.order(address(account), USDC, WETH, 1_000e6);
+        order.validTo = uint32(block.timestamp + account.MAX_ORDER_LIFETIME());
+
+        vm.prank(entryPoint);
+        account.placeOrder(order);
+    }
+
     function test_refuses_a_buy_order() public {
         GPv2Order.Data memory order = Fixtures.order(address(account), USDC, WETH, 1_000e6);
         order.kind = keccak256("buy");

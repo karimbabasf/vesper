@@ -78,6 +78,29 @@ library Passkey {
         _teachPrecompile(assertion);
     }
 
+    /// @dev authenticatorData one byte short of the minimum, and otherwise perfect: the right
+    ///      rpIdHash, the right flags, and a signature the precompile is taught to accept. Only
+    ///      the length check can refuse this, which is what makes it the test for that check.
+    function assertionWithAuthenticatorDataOneByteShort(bytes32 challenge)
+        internal
+        returns (Assertion memory assertion)
+    {
+        assertion.authenticatorData =
+            abi.encodePacked(RP_ID_HASH, bytes1(UP | UV), bytes3(uint24(1)));
+        assertion.clientDataJSON = string(
+            abi.encodePacked(
+                '{"type":"webauthn.get","challenge":"',
+                base64url(abi.encodePacked(challenge)),
+                '","origin":"https://vesper.local"}'
+            )
+        );
+        assertion.typeIndex = 1;
+        assertion.challengeIndex = 23;
+        assertion.r = R;
+        assertion.s = S;
+        _teachPrecompile(assertion);
+    }
+
     /// @dev A well formed ceremony carrying a challenge that is not the one being asked about.
     function assertionForTheWrongChallenge(bytes32 signedChallenge)
         internal
