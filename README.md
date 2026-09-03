@@ -14,9 +14,12 @@ being untrustworthy does not matter:
   sign another.
 - The signing key is generated inside an Intel TDX enclave, lives only in memory, and dies on
   restart. Your phone checks a measurement of the exact code before it enables the microphone.
-- The account is a contract. A validator module re-checks the target, the tokens, the caps and, above
-  a threshold, a WebAuthn assertion from your passkey. It is the only thing that can actually say no.
-- The price you hear is written into the signed order, so a filler cannot go below it.
+- The account is a contract, and a user operation can make it do exactly one thing: presign one CoW
+  order. A validator module re-checks the tokens, the caps, the price, the ether the operation's own
+  gas will cost, and, once the day's spend crosses a threshold, a WebAuthn assertion from your
+  passkey over that exact order. It is the only thing that can actually say no.
+- The price you hear is written into the signed order, so a filler cannot go below it, and the
+  contract holds a worst acceptable price of its own so a compromised agent cannot write a bad one.
 
 Full design: [docs/superpowers/specs/2026-09-03-vesper-v1-design.md](docs/superpowers/specs/2026-09-03-vesper-v1-design.md).
 Verified onchain addresses and constants: [docs/venue.md](docs/venue.md).
@@ -29,13 +32,14 @@ description of it. Step 1 ships `vesper.web`.
 
 ## Status
 
-Design approved. Steps 0 (venue verification), 1 (the order builder) and 2 (the contracts) are
-done.
+Steps 0 to 4 are done, on Base mainnet. A spoken sentence becomes an order, the fence lets it
+through, a solver filled one at 2.644387 USDC against a floor of 2.643162, and the same trade above
+the biometric threshold was refused without a passkey and accepted with one. Addresses and
+transactions: [docs/venue.md](docs/venue.md). Step 5 is the enclave and has not started.
 
 ## How to run it
 
-There is no application yet, only the part that turns a sentence into an order, and two ways to run
-it. Set up once:
+Set up once:
 
 ```bash
 cd enclave && python3 -m venv .venv && .venv/bin/pip install pytest
@@ -64,20 +68,25 @@ which defaults to `gpt-5-mini`.
 The allowlist and the unit conversion are applied in code after the model answers, so an invented
 token never becomes an order and the model never handles a uint256.
 
-In a browser, at http://127.0.0.1:8787:
+The console, at http://127.0.0.1:8787:
 
 ```bash
 cd enclave && .venv/bin/python -m vesper.web
 ```
 
-Two panels: what the model returned, and what the gate did with it. Six examples to click,
-including ones that should produce nothing. Standard library only, no build step.
+A sentence goes in and four hands report on it in the order they touch it: the model, the allowlist,
+CoW's live price, and the fence on Base. Only the last one decides anything, and the page is laid
+out to say so. The daily budget is read from the chain. Placing is hold to confirm, and above the
+threshold your passkey signs the exact order first. Standard library only, no build step.
+
+It needs `contracts/.env` to name a deployed `ACCOUNT` and `POLICY`. Without one the first two hands
+still work and the other two say there is nothing to read.
 
 ## The contracts
 
-`VoicePolicy` is an ERC-7579 validator module: about forty lines decide whether any of this is safe.
-`VoiceOrderGate` is the only address it will let an account call, and exists so the full CoW order
-travels in the calldata where the validator can read it.
+`VoicePolicy` is an ERC-7579 validator module, and one function in it decides whether any of this is
+safe. `VesperAccount` is the account it fences: it holds the funds, and the only thing a user
+operation can make it do is presign one CoW order.
 
 ```bash
 cd contracts && forge test
@@ -91,8 +100,40 @@ cd contracts && python3 script/mutation_report.py
 ```
 
 It replaces each guard with an empty block, runs the suite, and puts the guard back. The result is
-in [contracts/mutation-report.md](contracts/mutation-report.md). Two checks cannot be caught and the
-report says why, with the argument, rather than leaving them out.
+in [contracts/mutation-report.md](contracts/mutation-report.md). One check cannot be caught and the
+report says why, with the argument, rather than leaving it out.
+
+Unit tests are not enough on their own here, and that is not a figure of speech: the whole suite was
+green on a design the deployed CoW settlement rejects outright, because the mock in the test
+directory was more permissive than the real contract. So there is a second suite that runs the whole
+path against Base at a pinned block, using the deployed EntryPoint, the deployed settlement and the
+deployed P-256 precompile:
+
+```bash
+cd contracts && FOUNDRY_PROFILE=live forge test --match-path test/Live.t.sol
+```
+
+It needs the network and it needs `cast` on your path. Nothing gets deployed with real money until
+it passes there.
+
+Going live is one script, and it can be rehearsed in full first. Start a local fork, give the owner
+some pretend gas, and run the whole thing against that:
+
+```bash
+anvil --fork-url https://mainnet.base.org --port 8546
+```
+
+```bash
+cd contracts && RPC=http://127.0.0.1:8546 SKIP_FORK_SUITE=1 bash script/go-live.sh
+```
+
+It deploys, sweeps whatever the previous account held into the new one, sets the limits and the
+floors and the session key, and then reads every one of those back off the chain. Drop the `RPC` and
+`SKIP_FORK_SUITE` to do it for real. The enclave takes the same treatment: `VESPER_RPC` points
+`vesper.chain` at the fork, so a whole trade can be placed and checked without spending anything.
+
+Four independent reviews went at these contracts before deployment. What they found, what was
+changed, and what is accepted with the reason: [docs/audit-2026-09-03.md](docs/audit-2026-09-03.md).
 
 ## How to test it
 
@@ -100,8 +141,9 @@ report says why, with the argument, rather than leaving them out.
 cd enclave && .venv/bin/python -m pytest
 ```
 
-Eleven tests, all of them on `to_order`, which is the code that decides whether the model's answer
-becomes an order at all. Nothing here calls the API, so the suite runs offline and costs nothing.
+Fourteen tests. Eleven are on `to_order`, the code that decides whether the model's answer becomes
+an order at all; three pin the hand-written ABI encoder for the signature blob against `cast`.
+Nothing here calls the API, so the suite runs offline and costs nothing.
 
 There is deliberately no test of the model's own reading of a sentence. That needs an eval set run
 against the real API when the prompt or the model changes, not a unit test.

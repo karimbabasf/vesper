@@ -15,6 +15,8 @@ class Token:
     symbol: str
     decimals: int
     aliases: tuple[str, ...] = ()
+    # Where it lives on Base. Empty for a token the console can name but not trade.
+    address: str = ""
 
 
 @dataclass

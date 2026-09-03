@@ -6,3 +6,24 @@ test = "test"
 solc_version = "0.8.28"
 optimizer = true
 optimizer_runs = 200
+# The fork suite is excluded from the default run: it needs the network, and it needs ffi to make
+# a real P-256 signature for the passkey path. Run it deliberately:
+#
+#     FOUNDRY_PROFILE=live forge test --match-path test/Live.t.sol -vv
+no_match_path = "test/Live.t.sol"
+
+[profile.live]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+solc_version = "0.8.28"
+optimizer = true
+optimizer_runs = 200
+ffi = true
+# Profiles inherit from default, so the exclusion above has to be lifted here by hand.
+no_match_path = "test/nothing"
+fs_permissions = [{ access = "read", path = "./script" }]
+# Note for whoever runs this next: foundry 1.7.1 has no RIP-7212 precompile and no flag to turn
+# one on, so a fork of Base does not carry the one thing the passkey path needs. Live.t.sol asks
+# the deployed precompile over RPC and replays its answer. See _teachTheForkWhatBaseSays.
