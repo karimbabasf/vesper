@@ -15,9 +15,15 @@ from vesper.order import Allowlist, Token
 
 BASE = Allowlist(
     [
-        Token(symbol="USDC", decimals=6),
-        Token(symbol="WETH", decimals=18, aliases=("eth", "ether")),
-        Token(symbol="CBBTC", decimals=8, aliases=("bitcoin", "btc")),
+        Token(symbol="USDC", decimals=6, address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+        Token(
+            symbol="WETH", decimals=18, aliases=("eth", "ether"),
+            address="0x4200000000000000000000000000000000000006",
+        ),
+        Token(
+            symbol="CBBTC", decimals=8, aliases=("bitcoin", "btc"),
+            address="0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+        ),
     ]
 )
 
