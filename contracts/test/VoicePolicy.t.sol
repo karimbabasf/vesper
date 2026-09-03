@@ -167,6 +167,7 @@ contract VoicePolicyTest is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(0xBADBEEF, _ethSigned(opHash));
         op.signature = Fixtures.signature(abi.encodePacked(r, s, v));
 
+        vm.prank(account);
         assertEq(policy.validateUserOp(op, opHash), SIG_FAIL);
     }
 
@@ -176,6 +177,7 @@ contract VoicePolicyTest is Test {
             account, Fixtures.placeOrderCall(address(gate), order), Fixtures.signature("")
         );
 
+        vm.prank(account);
         assertEq(policy.validateUserOp(op, keccak256("op")), SIG_FAIL);
     }
 
@@ -191,6 +193,7 @@ contract VoicePolicyTest is Test {
         bytes32 flipped = bytes32(n - uint256(s));
         op.signature = Fixtures.signature(abi.encodePacked(r, flipped, v == 27 ? uint8(28) : uint8(27)));
 
+        vm.prank(account);
         assertEq(policy.validateUserOp(op, opHash), SIG_FAIL);
     }
 
@@ -360,7 +363,9 @@ contract VoicePolicyTest is Test {
         op.signature = Fixtures.signature(abi.encodePacked(r, s, v), assertion);
     }
 
+    /// @dev As the account, which is the only caller the policy will answer.
     function _validate(PackedUserOperation memory op) private returns (uint256) {
+        vm.prank(op.sender);
         return policy.validateUserOp(op, keccak256("op"));
     }
 }

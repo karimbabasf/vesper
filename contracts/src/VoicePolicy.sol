@@ -97,6 +97,12 @@ contract VoicePolicy is IValidator {
         override
         returns (uint256)
     {
+        // Only the account may ask about its own operation. Without this anyone can call in with
+        // a signature they watched go by and any op fields they like, and burn the daily budget
+        // without ever executing anything. The EntryPoint binds op to opHash; a direct caller does
+        // not, so the binding has to be re-established here by refusing direct callers.
+        if (msg.sender != op.sender) return SIG_FAIL;
+
         Session memory session = sessions[op.sender];
         // Revoked, or never registered. Redundant with the signature check below, since ecrecover
         // cannot recover to address(0); it is here so the revoked case reads plainly.
