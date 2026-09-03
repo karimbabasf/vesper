@@ -211,6 +211,12 @@
     <p class="budget-foot" id="budget-foot">Drains as you trade, comes back as time passes.</p>
   </div>
 
+  <div class="place" id="passkey-row">
+    <button type="button" id="enroll">Set up a passkey</button>
+    <span class="hint" id="passkey-hint">Needed only above the threshold. Registering costs one
+    transaction from the owner.</span>
+  </div>
+
   <div class="place" hidden id="place">
     <button type="button" class="hold" id="hold">
       <span class="wash"></span><span class="label" id="hold-label">Hold to place</span>
@@ -230,7 +236,7 @@
   const el = (id) => document.getElementById(id);
   const form = el('form'), instruction = el('instruction'), readButton = el('read');
   const hands = ['model', 'gate', 'cow', 'fence'];
-  let ready = null;
+  let ready = null, needsFace = false;
 
   const swaps = {};
 
@@ -327,9 +333,105 @@
 
     if (body.placeable) {
       ready = body.order;
+      needsFace = body.needsFace;
       el('place').hidden = false;
-      el('hold-label').textContent = body.needsFace ? 'Hold, then use your passkey' : 'Hold to place';
+      hold.disabled = false;
+      el('hold-label').textContent = needsFace ? 'Hold, then use your passkey' : 'Hold to place';
+      el('place-hint').textContent = 'This spends real money and cannot be undone.';
     }
+  }
+
+  /* --- the passkey ------------------------------------------------------------------------
+     Registration writes the public key into the fence, which is what makes an assertion mean
+     anything. The private half never leaves the authenticator, so there is nothing here to steal. */
+
+  const bytesToHex = (b) => '0x' + [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+  const hexToBytes = (hex) => Uint8Array.from(hex.replace(/^0x/, '').match(/../g).map(h => parseInt(h, 16)));
+  const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+  const unb64 = (t) => Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
+
+  async function rpIdHash() {
+    return bytesToHex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(location.hostname)));
+  }
+
+  /* A DER ECDSA signature is 30 len 02 rlen r 02 slen s, with r and s carrying a leading zero when
+     the high bit would otherwise read as a sign. The precompile wants them as bare 32 byte words. */
+  function fromDer(der) {
+    const d = new Uint8Array(der);
+    let i = 2;
+    const read = () => {
+      i++;                       // 0x02
+      const length = d[i++];
+      let value = d.slice(i, i + length);
+      i += length;
+      while (value.length > 32) value = value.slice(1);
+      const padded = new Uint8Array(32);
+      padded.set(value, 32 - value.length);
+      return bytesToHex(padded);
+    };
+    return [read(), read()];
+  }
+
+  el('enroll').addEventListener('click', async () => {
+    const button = el('enroll');
+    button.disabled = true;
+    button.textContent = 'Waiting for you';
+    try {
+      const credential = await navigator.credentials.create({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          rp: { name: 'Vesper', id: location.hostname },
+          user: { id: new TextEncoder().encode('operator'), name: 'operator', displayName: 'Operator' },
+          pubKeyCredParams: [{ type: 'public-key', alg: -7 }],   // ES256, the only one on chain
+          authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' },
+          timeout: 60000,
+        },
+      });
+
+      // SPKI for P-256 ends in the uncompressed point: 0x04 then x then y.
+      const spki = new Uint8Array(credential.response.getPublicKey());
+      const point = spki.slice(spki.length - 64);
+      localStorage.setItem('vesper.credential', b64(credential.rawId));
+
+      button.textContent = 'Registering';
+      const response = await fetch('/passkey', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          x: bytesToHex(point.slice(0, 32)),
+          y: bytesToHex(point.slice(32)),
+          rpIdHash: await rpIdHash(),
+        }),
+      });
+      const body = await response.json();
+      button.textContent = body.ok ? 'Passkey ready' : 'Registration failed';
+      el('passkey-hint').textContent = body.receipt.join('  ');
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = 'Set up a passkey';
+      el('passkey-hint').textContent = 'That did not complete: ' + error.message;
+    }
+  });
+
+  async function assertOver(challengeHex) {
+    const stored = localStorage.getItem('vesper.credential');
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge: hexToBytes(challengeHex),
+        rpId: location.hostname,
+        userVerification: 'required',
+        allowCredentials: stored ? [{ type: 'public-key', id: unb64(stored) }] : [],
+        timeout: 60000,
+      },
+    });
+    const json = new TextDecoder().decode(assertion.response.clientDataJSON);
+    const [r, s] = fromDer(assertion.response.signature);
+    return {
+      authenticatorData: bytesToHex(assertion.response.authenticatorData),
+      clientDataJSON: json,
+      typeIndex: json.indexOf('"type":'),
+      challengeIndex: json.indexOf('"challenge":'),
+      r, s,
+    };
   }
 
   /* Holding, rather than clicking, because this one cannot be taken back. */
@@ -349,12 +451,40 @@
   async function place() {
     cancelHold();
     hold.disabled = true;
+    el('hold-label').textContent = 'Pricing';
+    el('place-hint').textContent = 'Fixing the exact order with CoW.';
+
+    const prepared = await (await fetch('/prepare', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ order: ready }),
+    })).json();
+
+    if (!prepared.ok) {
+      el('hold-label').textContent = 'Refused';
+      el('place-hint').textContent = prepared.why;
+      return;
+    }
+
+    let assertion = null;
+    if (needsFace) {
+      el('hold-label').textContent = 'Waiting for you';
+      el('place-hint').textContent = 'Your passkey signs this exact order, not one like it.';
+      try {
+        assertion = await assertOver(prepared.challenge);
+      } catch (error) {
+        hold.disabled = false;
+        el('hold-label').textContent = 'Hold, then use your passkey';
+        el('place-hint').textContent = 'No assertion, so nothing was placed: ' + error.message;
+        return;
+      }
+    }
+
     el('hold-label').textContent = 'Placing';
     el('place-hint').textContent = 'Waiting for the EntryPoint.';
 
     const response = await fetch('/place', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ order: ready }),
+      body: JSON.stringify({ order: prepared.order, assertion }),
     });
     const body = await response.json();
 

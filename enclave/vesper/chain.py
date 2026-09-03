@@ -49,9 +49,6 @@ PRE_VERIFICATION_GAS = 120_000
 MAX_FEE_WEI = 200_000_000  # 0.2 gwei
 PRIORITY_FEE_WEI = 2_000_000  # 0.002 gwei
 
-EMPTY_ASSERTION = '(0x,"",0,0,0x' + "00" * 32 + ",0x" + "00" * 32 + ")"
-
-
 def env(path: Path) -> dict[str, str]:
     values = {}
     for line in path.read_text().splitlines():
@@ -180,14 +177,64 @@ def order_digest_challenge(order: dict) -> str:
     return cast("keccak", encoded)
 
 
-def _assertion_arg(assertion: dict | None) -> str:
+def _word(value: int) -> bytes:
+    return value.to_bytes(32, "big")
+
+
+def _bytes32(value: str) -> bytes:
+    return bytes.fromhex(value.removeprefix("0x")).rjust(32, b"\x00")
+
+
+def _tail(data: bytes) -> bytes:
+    """One dynamic value: its length, then its bytes padded out to a whole number of words."""
+    padding = (-len(data)) % 32
+    return _word(len(data)) + data + b"\x00" * padding
+
+
+def encode_signature(session_sig: str, assertion: dict | None) -> str:
+    """abi.encode(bytes sessionSig, bool hasAssertion, Assertion assertion).
+
+    Written here rather than handed to `cast abi-encode` because clientDataJSON is a JSON object
+    and cast takes tuples as a quoted string. Passing a string full of quotes through that parser
+    is a shell-escaping problem on the one path where a mistake means a signature over the wrong
+    bytes. Thirty lines of encoder is the cheaper risk, and test_signature_encoding.py pins it
+    against cast for the cases cast can express.
+    """
+    signature = bytes.fromhex(session_sig.removeprefix("0x"))
+
     if assertion is None:
-        return EMPTY_ASSERTION
-    return (
-        f'({assertion["authenticatorData"]},"{assertion["clientDataJSON"]}",'
-        f'{assertion["challengeIndex"]},{assertion["typeIndex"]},'
-        f'{assertion["r"]},{assertion["s"]})'
+        authenticator, client_data = b"", b""
+        challenge_index = type_index = 0
+        r = s = b"\x00" * 32
+    else:
+        authenticator = bytes.fromhex(assertion["authenticatorData"].removeprefix("0x"))
+        client_data = assertion["clientDataJSON"].encode()
+        challenge_index = int(assertion["challengeIndex"])
+        type_index = int(assertion["typeIndex"])
+        r, s = _bytes32(assertion["r"]), _bytes32(assertion["s"])
+
+    # The Assertion tuple is dynamic, so it is its own block and its offsets count from its start.
+    inner_head = 6 * 32
+    inner = (
+        _word(inner_head)
+        + _word(inner_head + len(_tail(authenticator)))
+        + _word(challenge_index)
+        + _word(type_index)
+        + r
+        + s
+        + _tail(authenticator)
+        + _tail(client_data)
     )
+
+    head = 3 * 32
+    encoded = (
+        _word(head)
+        + _word(1 if assertion is not None else 0)
+        + _word(head + len(_tail(signature)))
+        + _tail(signature)
+        + inner
+    )
+    return "0x" + encoded.hex()
 
 
 def build_user_op(order: dict, deployment: Deployment) -> tuple[str, str]:
@@ -225,18 +272,38 @@ def presign(order: dict, deployment: Deployment, assertion: dict | None = None) 
     template, op_hash = build_user_op(order, deployment)
 
     session_sig = cast("wallet", "sign", "--private-key", deployment.session_key, op_hash)
-    packed = cast(
-        "abi-encode",
-        f"f(bytes,bool,{ASSERTION_TUPLE})",
-        session_sig,
-        "true" if assertion else "false",
-        _assertion_arg(assertion),
-    )
+    packed = encode_signature(session_sig, assertion)
 
     owner = cast("wallet", "address", "--private-key", deployment.owner_key)
     receipt = cast(
         "send", ENTRY_POINT, f"handleOps({USEROP_TUPLE}[],address)",
         f"[{template[:-1]}{packed})]", owner,
+        "--private-key", deployment.owner_key, "--rpc-url", RPC, "--json",
+    )
+    return json.loads(receipt)
+
+
+def register_passkey(x: str, y: str, rp_id_hash: str, deployment: Deployment) -> dict:
+    """Point the fence at a passkey that exists on this machine.
+
+    The session key and its expiry are read back and rewritten unchanged: registerSession sets the
+    whole record at once, so registering a passkey without carrying the current key across would
+    revoke the agent as a side effect.
+    """
+    current = cast(
+        "call", deployment.policy,
+        "sessions(address)(address,uint48,bytes32,bytes32,bytes32,bytes32)",
+        deployment.account, "--rpc-url", RPC,
+    ).split()
+    key, expiry, attestation = current[0], current[1], current[2]
+
+    register = cast(
+        "calldata", "registerSession(address,bytes32,uint48,bytes32,bytes32,bytes32)",
+        key, attestation, expiry, rp_id_hash, x, y,
+    )
+    receipt = cast(
+        "send", deployment.account, "ownerCall(address,uint256,bytes)(bytes)",
+        deployment.policy, "0", register,
         "--private-key", deployment.owner_key, "--rpc-url", RPC, "--json",
     )
     return json.loads(receipt)

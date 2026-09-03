@@ -152,11 +152,17 @@ def budget() -> dict:
     return {"budget": budget_of(limits, "WETH", 18)}
 
 
-def place(request: dict) -> dict:
-    """Register the order with CoW, then presign it through the EntryPoint."""
+def prepare(request: dict) -> dict:
+    """Fix the exact order, and say what a passkey would have to sign over.
+
+    Two phases, because a passkey signs a challenge derived from the finished order and the order is
+    not finished until CoW has priced it. The browser gets the exact order back here and hands the
+    same one to /place, so the thing the face approved and the thing that gets signed are the same
+    bytes and not two orders that merely look alike.
+    """
     live = deployment()
     if live is None:
-        return {"ok": False, "receipt": ["No account deployed."], "budget": None}
+        return {"ok": False, "why": "No account deployed."}
 
     asked = request["order"]
     quoted = chain.quote(
@@ -164,13 +170,40 @@ def place(request: dict) -> dict:
     )
     floor = None if asked["floor"] is None else int(asked["floor"])
     order = chain.build_order(quoted, live.account, floor)
+    return {
+        "ok": True,
+        "order": order,
+        "challenge": chain.order_digest_challenge(order),
+        "uid": chain.order_uid(order, live.account),
+    }
+
+
+def register_passkey(request: dict) -> dict:
+    live = deployment()
+    if live is None:
+        return {"ok": False, "receipt": ["No account deployed."]}
+
+    result = chain.register_passkey(
+        request["x"], request["y"], request["rpIdHash"], live
+    )
+    return {"ok": True, "receipt": [f"tx {result.get('transactionHash', '?')}", "passkey registered"]}
+
+
+def place(request: dict) -> dict:
+    """Register the order with CoW, then presign it through the EntryPoint."""
+    live = deployment()
+    if live is None:
+        return {"ok": False, "receipt": ["No account deployed."], "budget": None}
+
+    order = request["order"]
+    assertion = request.get("assertion")
 
     receipt = []
     try:
         chain.register_with_cow(order, live.account)
         receipt.append("orderbook accepted it")
 
-        result = chain.presign(order, live)
+        result = chain.presign(order, live, assertion)
         receipt.append(f"tx {result.get('transactionHash', '?')}")
 
         uid = chain.order_uid(order, live.account)
@@ -236,8 +269,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         routes = {
             "/read": lambda body: read(body["instruction"]),
+            "/prepare": prepare,
             "/place": place,
             "/disarm": disarm,
+            "/passkey": register_passkey,
         }
         handler = routes.get(self.path)
         if handler is None:
