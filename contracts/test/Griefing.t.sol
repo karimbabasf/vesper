@@ -3,22 +3,19 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {GPv2Order, PackedUserOperation, SIG_FAIL} from "../src/Types.sol";
-import {VoiceOrderGate} from "../src/VoiceOrderGate.sol";
 import {VoicePolicy} from "../src/VoicePolicy.sol";
-import {Fixtures, MockSettlement, USDC, WETH} from "./Fixtures.sol";
+import {Fixtures, USDC, WETH} from "./Fixtures.sol";
 import {Passkey} from "./Passkey.sol";
 
 /// @notice Regression test for audit finding 1: validateUserOp used to trust any caller,
 ///         so a stranger could replay an observed signature and exhaust the daily budget.
 contract GriefingTest is Test {
     VoicePolicy policy;
-    VoiceOrderGate gate;
     address account = address(0xA11CE);
     uint256 sessionPk = 0xE1C1A7E;
 
     function setUp() public {
-        gate = new VoiceOrderGate(new MockSettlement());
-        policy = new VoicePolicy(gate);
+        policy = new VoicePolicy();
 
         vm.warp(1_700_000_000);
         vm.startPrank(account);
@@ -55,9 +52,8 @@ contract GriefingTest is Test {
         vm.startPrank(address(0xBAD));
         for (uint256 i = 0; i < 4; i++) {
             GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 5_000e6);
-            PackedUserOperation memory op = Fixtures.userOp(
-                account, Fixtures.placeOrderCall(address(gate), order), signature
-            );
+            PackedUserOperation memory op =
+                Fixtures.userOp(account, Fixtures.placeOrderCall(order), signature);
             assertEq(policy.validateUserOp(op, opHash), SIG_FAIL);
         }
         vm.stopPrank();

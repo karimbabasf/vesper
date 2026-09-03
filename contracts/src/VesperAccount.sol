@@ -1,34 +1,48 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {IValidator, PackedUserOperation} from "./Types.sol";
+import {GPv2Order, ISettlement, IValidator, IVesperAccount, PackedUserOperation} from "./Types.sol";
 
 /// @title VesperAccount
 /// @notice The smallest account that can hold funds and be fenced by VoicePolicy.
 ///
 /// The design called for Kernel v3, chosen for bundler and paymaster ergonomics. Neither is needed:
 /// `EntryPoint.handleOps` is permissionless, so the operator submits its own user operations. What
-/// is left is this, which has the advantage of being readable in one sitting and testable in this
-/// repository rather than trusting a factory address and an init encoding.
+/// is left is this, which has the advantage of being readable in one sitting.
 ///
-/// The account itself decides nothing. Every user operation is handed to the validator, and the
-/// only privileged path is the owner's, which exists so a human can always get the funds out.
-contract VesperAccount {
+/// The account presigns its own orders. An earlier version routed them through a helper contract so
+/// the validator could read the order struct, and that cannot work: GPv2Settlement requires the
+/// caller to be the address encoded inside the order uid, so only the order's owner can presign it.
+/// The helper reverted with "GPv2: cannot presign order" on Base. Folding the call in here fixes it
+/// and takes the general `execute` entry point away at the same time, which is the larger win: a
+/// user operation can now do exactly one thing, and that is true even if the validator is wrong.
+contract VesperAccount is IVesperAccount {
     address public immutable entryPoint;
     IValidator public immutable validator;
     address public immutable owner;
+    ISettlement public immutable settlement;
+
+    /// @dev Read from the settlement at deploy time rather than hardcoded, so it cannot drift from
+    ///      the chain this is deployed on.
+    bytes32 public immutable domainSeparator;
 
     error NotEntryPoint();
     error NotOwner();
-    error NotSelfOrOwner();
+    error NotASale();
+    error NotErc20Balances();
+    error PartialFillsNotSupported();
+    error ReceiverMustBeTheAccount();
+    error NoFloor();
     error CallFailed(bytes reason);
 
-    event Executed(address indexed target, uint256 value, bytes data);
+    event OrderPlaced(bytes32 indexed orderDigest, address sellToken, uint256 sellAmount, uint256 floor);
 
-    constructor(address entryPoint_, IValidator validator_, address owner_) {
+    constructor(address entryPoint_, IValidator validator_, address owner_, ISettlement settlement_) {
         entryPoint = entryPoint_;
         validator = validator_;
         owner = owner_;
+        settlement = settlement_;
+        domainSeparator = settlement_.domainSeparator();
     }
 
     receive() external payable {}
@@ -50,18 +64,40 @@ contract VesperAccount {
         }
     }
 
-    /// @notice ERC-7579 single call. mode is accepted and ignored: this account does one call.
-    /// @param executionCalldata target(20) || value(32) || data
-    function execute(bytes32, bytes calldata executionCalldata) external {
-        if (msg.sender != entryPoint && msg.sender != owner) revert NotSelfOrOwner();
+    /// @notice Presign one CoW order. The only thing a user operation can reach.
+    ///
+    /// The EntryPoint is the sole caller, which means VoicePolicy has already returned SIG_OK for
+    /// this exact calldata: the EntryPoint hashes the operation, hands the same bytes to the
+    /// validator, and then executes those same bytes. The checks below are not the fence, they are
+    /// the shape rules the fence assumes, restated where they cannot be skipped.
+    ///
+    /// The owner is deliberately not a caller here. `ownerCall` already reaches the settlement, so
+    /// a second privileged path would add surface and no ability.
+    function placeOrder(GPv2Order.Data calldata order)
+        external
+        override
+        returns (bytes memory orderUid)
+    {
+        if (msg.sender != entryPoint) revert NotEntryPoint();
 
-        address target = address(bytes20(executionCalldata[0:20]));
-        uint256 value = uint256(bytes32(executionCalldata[20:52]));
-        bytes calldata data = executionCalldata[52:];
+        if (order.kind != GPv2Order.KIND_SELL) revert NotASale();
+        if (order.partiallyFillable) revert PartialFillsNotSupported();
+        if (
+            order.sellTokenBalance != GPv2Order.BALANCE_ERC20
+                || order.buyTokenBalance != GPv2Order.BALANCE_ERC20
+        ) revert NotErc20Balances();
 
-        (bool ok, bytes memory reason) = target.call{value: value}(data);
-        if (!ok) revert CallFailed(reason);
-        emit Executed(target, value, data);
+        // Proceeds land in the account the validator checked, never an address the model chose.
+        if (order.receiver != address(this)) revert ReceiverMustBeTheAccount();
+
+        // buyAmount is the floor spoken out loud. Zero would let a solver fill at any price.
+        if (order.buyAmount == 0) revert NoFloor();
+
+        bytes32 orderDigest = GPv2Order.hash(order, domainSeparator);
+        orderUid = abi.encodePacked(orderDigest, address(this), order.validTo);
+        settlement.setPreSignature(orderUid, true);
+
+        emit OrderPlaced(orderDigest, order.sellToken, order.sellAmount, order.buyAmount);
     }
 
     /// @notice The way out. The validator never sees this, and it is the reason a burner is safe

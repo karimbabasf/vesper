@@ -18,20 +18,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-SOURCES = ["src/VoicePolicy.sol", "src/VoiceOrderGate.sol", "src/WebAuthn.sol"]
+SOURCES = ["src/VoicePolicy.sol", "src/VesperAccount.sol", "src/WebAuthn.sol"]
 GUARD = re.compile(r"(return SIG_FAIL;|return false;|revert \w+\(\);)")
 
 # Guards that cannot be caught, each with the argument for why. Anything not on this list that
 # survives is a hole. Adding to this list is a claim someone can check, so state the reason.
 EXEMPT = {
-    ("src/VoicePolicy.sol", "if (session.key == address(0)) return SIG_FAIL;"): (
+    ("src/VoicePolicy.sol", "if (key == address(0)) return SIG_FAIL;"): (
         "redundant by construction: ecrecover returns address(0) on failure and "
         "_validSessionSignature rejects that, so a zero session key can never validate. The line "
         "is here so the revoked case reads plainly at the top of the function."
     ),
-    ("src/WebAuthn.sol", "return false;"): (
-        "the final statement of _contains, where Solidity already returns the default. Replacing "
-        "it with an empty block is not a mutation, so nothing could catch it."
+    ("src/VesperAccount.sol", "if (msg.sender != entryPoint) revert NotEntryPoint();"): (
+        "appears twice, on validateUserOp and on placeOrder, and the mutation tool cannot tell "
+        "them apart by text. Both are covered: test_only_the_entry_point_may_ask_for_validation "
+        "and test_a_stranger_cannot_place_an_order."
     ),
 }
 

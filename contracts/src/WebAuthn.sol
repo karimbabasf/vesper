@@ -2,9 +2,15 @@
 pragma solidity ^0.8.28;
 
 /// @notice One passkey assertion, as the browser produces it.
+///
+/// The two indices say where in `clientDataJSON` the `type` and `challenge` fields begin. The
+/// browser knows them and passing them costs two words; the alternative is searching the string,
+/// which is both slower and weaker. See the note on `verify`.
 struct Assertion {
     bytes authenticatorData;
     string clientDataJSON;
+    uint256 challengeIndex;
+    uint256 typeIndex;
     bytes32 r;
     bytes32 s;
 }
@@ -22,6 +28,9 @@ library WebAuthn {
     uint8 internal constant FLAG_USER_PRESENT = 0x01;
     uint8 internal constant FLAG_USER_VERIFIED = 0x04;
 
+    bytes internal constant EXPECTED_TYPE = '"type":"webauthn.get"';
+
+    /// @param challenge What the authenticator was asked to sign over. Here, the order digest.
     function verify(
         Assertion memory assertion,
         bytes32 challenge,
@@ -39,22 +48,46 @@ library WebAuthn {
         // The check people forget: without this a passkey unlocked by a tap counts as a face.
         if (flags & FLAG_USER_VERIFIED == 0) return false;
 
-        if (!_challengeMatches(assertion.clientDataJSON, challenge)) return false;
+        bytes memory clientData = bytes(assertion.clientDataJSON);
+
+        // A signature made for registration, or for any ceremony that is not an assertion, must
+        // not count as one.
+        if (!_equalAt(clientData, assertion.typeIndex, EXPECTED_TYPE)) return false;
+
+        // Compared at the offset the caller names, not searched for anywhere in the string.
+        //
+        // Being exact about what this buys, because it is easy to overstate: the index is supplied
+        // by the caller, so anchoring alone does not stop someone who points it at a copy of the
+        // expected text. What stops that is that no authenticator will ever produce such a copy.
+        // Every field the browser writes into clientDataJSON is a fixed keyword, a base64url value
+        // or an origin, and none of those can contain the quote character the needle starts with.
+        // Anchoring earns its place by turning an O(n*m) scan into an O(m) compare and by not
+        // asking the reader to make that argument about a search.
+        bytes memory expected =
+            abi.encodePacked('"challenge":"', _base64url(abi.encodePacked(challenge)), '"');
+        if (!_equalAt(clientData, assertion.challengeIndex, expected)) return false;
 
         bytes32 message =
-            sha256(abi.encodePacked(assertion.authenticatorData, sha256(bytes(assertion.clientDataJSON))));
+            sha256(abi.encodePacked(assertion.authenticatorData, sha256(clientData)));
 
         return _p256(message, assertion.r, assertion.s, pubKeyX, pubKeyY);
     }
 
-    /// @dev clientDataJSON carries the challenge as base64url with no padding.
-    function _challengeMatches(string memory clientDataJSON, bytes32 challenge)
+    /// @dev True when `needle` sits in `haystack` starting exactly at `offset`. Out of range is
+    ///      false, never a revert: this is one of several reasons an assertion can be refused and
+    ///      they should all look the same from outside.
+    function _equalAt(bytes memory haystack, uint256 offset, bytes memory needle)
         private
         pure
         returns (bool)
     {
-        bytes memory needle = abi.encodePacked('"challenge":"', _base64url(abi.encodePacked(challenge)), '"');
-        return _contains(bytes(clientDataJSON), needle);
+        unchecked {
+            if (offset > haystack.length || needle.length > haystack.length - offset) return false;
+            for (uint256 i = 0; i < needle.length; i++) {
+                if (haystack[offset + i] != needle[i]) return false;
+            }
+        }
+        return true;
     }
 
     /// @dev Returns false rather than reverting when the precompile is absent, so a chain without
@@ -78,21 +111,6 @@ library WebAuthn {
         for (uint256 i = 0; i < length; i++) {
             out[i] = data[start + i];
         }
-    }
-
-    function _contains(bytes memory haystack, bytes memory needle) private pure returns (bool) {
-        if (needle.length > haystack.length) return false;
-        for (uint256 i = 0; i <= haystack.length - needle.length; i++) {
-            bool same = true;
-            for (uint256 j = 0; j < needle.length; j++) {
-                if (haystack[i + j] != needle[j]) {
-                    same = false;
-                    break;
-                }
-            }
-            if (same) return true;
-        }
-        return false;
     }
 
     bytes internal constant ALPHABET =

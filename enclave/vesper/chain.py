@@ -21,22 +21,35 @@ from pathlib import Path
 RPC = "https://mainnet.base.org"
 COW_API = "https://api.cow.fi/base/api/v1"
 ENTRY_POINT = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
+SETTLEMENT = "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
 
 ORDER_TUPLE = (
     "(address,address,address,uint256,uint256,uint32,bytes32,uint256,bytes32,bool,bytes32,bytes32)"
 )
-USEROP_TUPLE = "(address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes)"
 
-# The deployed v0.7 EntryPoint answers to these selectors, and they are not the ones cast derives
-# from the struct signature above. The encoding matches, only the canonical string does not, so
-# these two are called by raw selector. Confirmed against the deployed bytecode on Base.
-SEL_GET_USER_OP_HASH = "0x22cdde4c"
-SEL_HANDLE_OPS = "0x765e827f"
+# Nine fields. The eight-field version of this string produced selectors the deployed EntryPoint
+# does not answer to, and operations laid out one field short: paymasterAndData was missing, so the
+# signature landed where the paymaster belongs. Checked by selector, not by memory:
+#   handleOps(USEROP_TUPLE[],address) -> 0x765e827f, present in the deployed bytecode.
+USEROP_TUPLE = "(address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes)"
+
+# One assertion, matching the Assertion struct in src/WebAuthn.sol.
+ASSERTION_TUPLE = "(bytes,string,uint256,uint256,bytes32,bytes32)"
 
 KIND_SELL = "0xf3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775"
 BALANCE_ERC20 = "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9"
 
 DEADLINE_SECONDS = 300
+
+# Enough for validation plus one setPreSignature, measured on a fork at 195k for the whole
+# operation. Rounded up rather than tuned: the account pays for what it uses, not what it asks for.
+VERIFICATION_GAS = 400_000
+CALL_GAS = 600_000
+PRE_VERIFICATION_GAS = 120_000
+MAX_FEE_WEI = 200_000_000  # 0.2 gwei
+PRIORITY_FEE_WEI = 2_000_000  # 0.002 gwei
+
+EMPTY_ASSERTION = '(0x,"",0,0,0x' + "00" * 32 + ",0x" + "00" * 32 + ")"
 
 
 def env(path: Path) -> dict[str, str]:
@@ -82,7 +95,6 @@ class Deployment:
     owner_key: str
     session_key: str
     account: str
-    gate: str
     policy: str
     settings: dict[str, str] = field(default_factory=dict)
 
@@ -93,7 +105,6 @@ class Deployment:
             owner_key=values["PRIVATE_KEY"],
             session_key=values["SESSION_PRIVATE_KEY"],
             account=values["ACCOUNT"],
-            gate=values["GATE"],
             policy=values["POLICY"],
             settings=values,
         )
@@ -154,7 +165,7 @@ def register_with_cow(order: dict, account: str) -> str:
     return body
 
 
-def _order_args(order: dict) -> str:
+def order_args(order: dict) -> str:
     return (
         f'({order["sellToken"]},{order["buyToken"]},{order["receiver"]},'
         f'{order["sellAmount"]},{order["buyAmount"]},{order["validTo"]},'
@@ -163,65 +174,72 @@ def _order_args(order: dict) -> str:
     )
 
 
-def presign(order: dict, deployment: Deployment) -> dict:
-    """Build the user operation, sign it with the session key, and hand it to the EntryPoint.
+def order_digest_challenge(order: dict) -> str:
+    """keccak256(abi.encode(order)), which is what a passkey has to sign over above the threshold."""
+    encoded = cast("abi-encode", f"f({ORDER_TUPLE})", order_args(order))
+    return cast("keccak", encoded)
 
-    The account never sees a decision: the EntryPoint asks VoicePolicy, and only a SIG_OK gets as
-    far as calling the gate.
-    """
-    place = cast("calldata", f"placeOrder({ORDER_TUPLE})", _order_args(order))
-    execution = (
-        deployment.gate.lower().replace("0x", "")
-        + f"{0:064x}"
-        + place.replace("0x", "")
+
+def _assertion_arg(assertion: dict | None) -> str:
+    if assertion is None:
+        return EMPTY_ASSERTION
+    return (
+        f'({assertion["authenticatorData"]},"{assertion["clientDataJSON"]}",'
+        f'{assertion["challengeIndex"]},{assertion["typeIndex"]},'
+        f'{assertion["r"]},{assertion["s"]})'
     )
-    call_data = cast("calldata", "execute(bytes32,bytes)", "0x" + "00" * 32, "0x" + execution)
+
+
+def build_user_op(order: dict, deployment: Deployment) -> tuple[str, str]:
+    """The unsigned operation, and the hash the EntryPoint will want signed."""
+    call_data = cast("calldata", f"placeOrder({ORDER_TUPLE})", order_args(order))
 
     nonce = cast(
         "call", ENTRY_POINT, "getNonce(address,uint192)(uint256)",
         deployment.account, "0", "--rpc-url", RPC,
     ).split()[0]
 
-    verification_gas, call_gas, pre_verification = 400_000, 600_000, 120_000
-    max_fee, priority_fee = 200_000_000, 2_000_000  # 0.2 gwei and 0.002 gwei
-    account_gas_limits = f"0x{verification_gas:032x}{call_gas:032x}"
-    gas_fees = f"0x{priority_fee:032x}{max_fee:032x}"
+    account_gas_limits = f"0x{VERIFICATION_GAS:032x}{CALL_GAS:032x}"
+    gas_fees = f"0x{PRIORITY_FEE_WEI:032x}{MAX_FEE_WEI:032x}"
 
     def op(signature: str) -> str:
         return (
             f"({deployment.account},{nonce},0x,{call_data},{account_gas_limits},"
-            f"{pre_verification},{gas_fees},{signature})"
+            f"{PRE_VERIFICATION_GAS},{gas_fees},0x,{signature})"
         )
 
     op_hash = cast(
-        "call", ENTRY_POINT,
-        "--data", SEL_GET_USER_OP_HASH
-        + cast("abi-encode", f"f({USEROP_TUPLE})", op("0x")).removeprefix("0x"),
+        "call", ENTRY_POINT, f"getUserOpHash({USEROP_TUPLE})(bytes32)", op("0x"),
         "--rpc-url", RPC,
-    )
+    ).split()[0]
+    return op(""), op_hash
+
+
+def presign(order: dict, deployment: Deployment, assertion: dict | None = None) -> dict:
+    """Sign the operation with the session key and hand it to the EntryPoint.
+
+    The account never sees a decision: the EntryPoint asks VoicePolicy, and only a SIG_OK gets as
+    far as calling placeOrder. Above the biometric threshold the policy also wants `assertion`,
+    which is a real WebAuthn assertion over keccak256(abi.encode(order)).
+    """
+    template, op_hash = build_user_op(order, deployment)
 
     session_sig = cast("wallet", "sign", "--private-key", deployment.session_key, op_hash)
     packed = cast(
         "abi-encode",
-        "f(bytes,bool,(bytes,string,bytes32,bytes32))",
+        f"f(bytes,bool,{ASSERTION_TUPLE})",
         session_sig,
-        "false",
-        '(0x,"",0x' + "00" * 32 + ",0x" + "00" * 32 + ")",
+        "true" if assertion else "false",
+        _assertion_arg(assertion),
     )
 
     owner = cast("wallet", "address", "--private-key", deployment.owner_key)
     receipt = cast(
-        "send", ENTRY_POINT,
-        "--data", SEL_HANDLE_OPS
-        + cast(
-            "abi-encode", f"f({USEROP_TUPLE}[],address)", f"[{op(packed)}]", owner
-        ).removeprefix("0x"),
+        "send", ENTRY_POINT, f"handleOps({USEROP_TUPLE}[],address)",
+        f"[{template[:-1]}{packed})]", owner,
         "--private-key", deployment.owner_key, "--rpc-url", RPC, "--json",
     )
     return json.loads(receipt)
-
-
-SETTLEMENT = "0x9008D19f58AAbD9eD0D60971565AA8510560ab41"
 
 
 def presigned(uid: str) -> bool:
@@ -230,6 +248,24 @@ def presigned(uid: str) -> bool:
         "call", SETTLEMENT, "preSignature(bytes)(uint256)", uid, "--rpc-url", RPC
     )
     return result.split()[0] != "0"
+
+
+def order_uid(order: dict, account: str) -> str:
+    """orderDigest || owner || validTo, the 56 bytes the settlement stores."""
+    separator = cast("call", SETTLEMENT, "domainSeparator()(bytes32)", "--rpc-url", RPC).split()[0]
+    type_hash = "0xd5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489"
+    struct_hash = cast(
+        "keccak",
+        cast(
+            "abi-encode",
+            "f(bytes32,address,address,address,uint256,uint256,uint32,bytes32,uint256,bytes32,bool,bytes32,bytes32)",
+            type_hash, order["sellToken"], order["buyToken"], order["receiver"],
+            order["sellAmount"], order["buyAmount"], str(order["validTo"]), order["appData"],
+            order["feeAmount"], KIND_SELL, "false", BALANCE_ERC20, BALANCE_ERC20,
+        ),
+    )
+    digest = cast("keccak", "0x1901" + separator[2:] + struct_hash[2:])
+    return digest + account.lower().replace("0x", "") + f"{int(order['validTo']):08x}"
 
 
 def status(uid: str) -> dict | None:

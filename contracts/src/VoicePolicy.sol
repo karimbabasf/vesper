@@ -4,13 +4,13 @@ pragma solidity ^0.8.28;
 import {
     GPv2Order,
     IValidator,
+    IVesperAccount,
     MODULE_TYPE_VALIDATOR,
     PackedUserOperation,
     SIG_FAIL,
     SIG_OK
 } from "./Types.sol";
 import {Assertion, WebAuthn} from "./WebAuthn.sol";
-import {VoiceOrderGate} from "./VoiceOrderGate.sol";
 
 /// @title VoicePolicy
 /// @notice The whole security boundary, in one function.
@@ -18,47 +18,55 @@ import {VoiceOrderGate} from "./VoiceOrderGate.sol";
 /// Everything upstream, the audio and the model and the enclave, exists to make the inputs to
 /// `validateUserOp` trustworthy enough to be worth checking. This is the only component that can
 /// refuse in a way the enclave cannot influence, because the enclave does not run it.
+///
+/// There is no assembly here. An earlier version hand-decoded an ERC-7579 execute envelope to find
+/// the order, read one offset from the wrong base, and would have decoded a different order from
+/// the one the EntryPoint went on to execute. The account now takes the order as a plain external
+/// argument, so both sides read it through the compiler's decoder and cannot disagree.
 contract VoicePolicy is IValidator {
+    /// @dev key and expiry share slot 0, and the hot path reads nothing else. The three passkey
+    ///      fields are only loaded above the biometric threshold, which is the uncommon case.
     struct Session {
         address key; // the enclave's session key, dead on restart
-        bytes32 attestationHash; // the image the owner approved
         uint48 expiry;
+        bytes32 attestationHash; // recorded, not verified: see the note on registerSession
         bytes32 rpIdHash; // the origin the passkey belongs to
         bytes32 passkeyX;
         bytes32 passkeyY;
     }
 
+    /// @dev Two slots rather than four. uint128 holds 3.4e38, and the largest token amount that
+    ///      exists anywhere is around 1e30, so nothing real truncates. Anything that would is
+    ///      rejected by the ABI decoder at `setLimits` before it can be stored.
     struct Limits {
+        uint128 perTradeCap; // token units
+        uint128 dailyCap; // token units, rolling 24h
+        uint128 biometricThreshold; // above this the passkey is required
         bool allowed;
-        uint256 perTradeCap; // token units
-        uint256 dailyCap; // token units, rolling 24h
-        uint256 biometricThreshold; // above this the passkey is required
     }
 
+    /// @dev One slot. amount is bounded by dailyCap, which is a uint128.
     struct Spend {
-        uint256 amount;
+        uint128 amount;
         uint48 windowStart;
     }
-
-    /// @notice The one address an account may call through this validator.
-    VoiceOrderGate public immutable gate;
 
     mapping(address account => Session) public sessions;
     mapping(address account => mapping(address token => Limits)) public limits;
     mapping(address account => mapping(address token => Spend)) internal spends;
-    mapping(address account => bool) public installed;
 
     event SessionRegistered(address indexed account, address key, bytes32 attestationHash);
     event SessionRevoked(address indexed account);
     event LimitsSet(address indexed account, address indexed token, Limits limits);
 
-    constructor(VoiceOrderGate gate_) {
-        gate = gate_;
-    }
-
     // --- owner controls, always callable by the account itself -----------------------------
 
-    /// @notice Authorise one enclave session key under one approved image.
+    /// @notice Authorise one enclave session key.
+    ///
+    /// `attestationHash` is the enclave image the owner says they approved. It is a record and not
+    /// a check: verifying a TDX quote on chain is not affordable, so nothing here can confirm the
+    /// key was really generated inside that image. Whoever registers the key is trusted to have
+    /// checked the quote off chain. Written down here so the claim is not read as stronger.
     function registerSession(
         address key,
         bytes32 attestationHash,
@@ -68,7 +76,7 @@ contract VoicePolicy is IValidator {
         bytes32 passkeyY
     ) external {
         sessions[msg.sender] =
-            Session(key, attestationHash, expiry, rpIdHash, passkeyX, passkeyY);
+            Session(key, expiry, attestationHash, rpIdHash, passkeyX, passkeyY);
         emit SessionRegistered(msg.sender, key, attestationHash);
     }
 
@@ -85,9 +93,9 @@ contract VoicePolicy is IValidator {
 
     /// @notice What is left of today's budget for one token.
     function remainingToday(address account, address token) external view returns (uint256) {
-        Limits memory limit = limits[account][token];
+        uint256 cap = limits[account][token].dailyCap;
         uint256 spent = _spentToday(account, token);
-        return spent >= limit.dailyCap ? 0 : limit.dailyCap - spent;
+        return spent >= cap ? 0 : cap - spent;
     }
 
     // --- the boundary ----------------------------------------------------------------------
@@ -103,22 +111,31 @@ contract VoicePolicy is IValidator {
         // not, so the binding has to be re-established here by refusing direct callers.
         if (msg.sender != op.sender) return SIG_FAIL;
 
-        Session memory session = sessions[op.sender];
+        // The free checks first, so a malformed operation costs no storage reads.
+        //
+        // Exactly one call, of exactly one shape. GPv2Order.Data is twelve static fields, so a
+        // well formed call is the selector and nothing but the struct. Any other length is either
+        // a different function or the same one with something appended, and both are refused here
+        // rather than reasoned about.
+        if (op.callData.length != 4 + GPv2Order.ENCODED_LENGTH) return SIG_FAIL;
+        if (bytes4(op.callData) != IVesperAccount.placeOrder.selector) return SIG_FAIL;
+
+        // The EntryPoint calls op.sender with these exact bytes, so naming the target is not
+        // needed: the target is the sender, and the sender is the account that just called in.
+        GPv2Order.Data memory order = abi.decode(op.callData[4:], (GPv2Order.Data));
+
+        (address key, uint48 expiry) = _sessionKey(op.sender);
         // Revoked, or never registered. Redundant with the signature check below, since ecrecover
         // cannot recover to address(0); it is here so the revoked case reads plainly.
-        if (session.key == address(0)) return SIG_FAIL;
-        if (block.timestamp > session.expiry) return SIG_FAIL; // the key has aged out
-
-        (address target, bytes calldata callData) = _decodeSingleCall(op.callData);
-        if (target != address(gate)) return SIG_FAIL; // one address in the world
-        if (bytes4(callData) != VoiceOrderGate.placeOrder.selector) return SIG_FAIL;
-
-        GPv2Order.Data memory order = abi.decode(callData[4:], (GPv2Order.Data));
+        if (key == address(0)) return SIG_FAIL;
+        if (block.timestamp > expiry) return SIG_FAIL; // the key has aged out
 
         Limits memory sellLimits = limits[op.sender][order.sellToken];
         if (!sellLimits.allowed) return SIG_FAIL;
         if (!limits[op.sender][order.buyToken].allowed) return SIG_FAIL;
 
+        // Per trade before daily, and not only for readability: passing this bounds sellAmount by
+        // a uint128, which is what keeps the sum on the next line from overflowing.
         if (order.sellAmount > sellLimits.perTradeCap) return SIG_FAIL;
         if (_spentToday(op.sender, order.sellToken) + order.sellAmount > sellLimits.dailyCap) {
             return SIG_FAIL;
@@ -127,10 +144,11 @@ contract VoicePolicy is IValidator {
         (bytes memory sessionSig, bool hasAssertion, Assertion memory assertion) =
             _decodeSignature(op.signature);
 
-        if (!_validSessionSignature(opHash, sessionSig, session.key)) return SIG_FAIL;
+        if (!_validSessionSignature(opHash, sessionSig, key)) return SIG_FAIL;
 
         if (order.sellAmount > sellLimits.biometricThreshold) {
             if (!hasAssertion) return SIG_FAIL;
+            Session storage session = sessions[op.sender];
             if (
                 !WebAuthn.verify(
                     assertion,
@@ -142,38 +160,23 @@ contract VoicePolicy is IValidator {
             ) return SIG_FAIL;
         }
 
-        _recordSpend(op.sender, order.sellToken, order.sellAmount);
+        _recordSpend(op.sender, order.sellToken, uint128(order.sellAmount));
         return SIG_OK;
     }
 
     // --- internals -------------------------------------------------------------------------
 
-    /// @dev ERC-7579 single call: execute(bytes32 mode, bytes executionCalldata) where
-    ///      executionCalldata is target(20) || value(32) || data.
-    function _decodeSingleCall(bytes calldata opCallData)
-        internal
-        pure
-        returns (address target, bytes calldata data)
-    {
-        // 4 selector + 32 mode + 32 offset + 32 length is the shortest possible encoding.
-        if (opCallData.length < 100) return (address(0), opCallData[0:0]);
-
-        bytes calldata execution;
-        assembly {
-            // args begin after the 4 byte selector: (bytes32 mode, bytes executionCalldata)
-            let args := add(opCallData.offset, 4)
-            let start := add(args, calldataload(add(args, 32)))
-            execution.length := calldataload(start)
-            execution.offset := add(start, 32)
-        }
-        if (execution.length < 52) return (address(0), opCallData[0:0]);
-
-        target = address(bytes20(execution[0:20]));
-        // execution[20:52] is msg.value, which must be zero: this account never sends ether.
-        if (uint256(bytes32(execution[20:52])) != 0) return (address(0), opCallData[0:0]);
-        data = execution[52:];
+    /// @dev Reads slot 0 of the session and stops. Loading the whole struct would pull three
+    ///      passkey words the common trade never looks at.
+    function _sessionKey(address account) internal view returns (address key, uint48 expiry) {
+        Session storage session = sessions[account];
+        key = session.key;
+        expiry = session.expiry;
     }
 
+    /// @dev A malformed blob reverts here rather than returning SIG_FAIL. Only the account can
+    ///      reach this line, and the account only ever carries what its own signer produced, so
+    ///      the difference is visible to the operator and to nobody else.
     function _decodeSignature(bytes calldata signature)
         internal
         pure
@@ -209,15 +212,14 @@ contract VoicePolicy is IValidator {
 
     function _spentToday(address account, address token) internal view returns (uint256) {
         Spend memory spend = spends[account][token];
-        if (block.timestamp >= spend.windowStart + 1 days) return 0;
+        if (block.timestamp >= uint256(spend.windowStart) + 1 days) return 0;
         return spend.amount;
     }
 
-    function _recordSpend(address account, address token, uint256 amount) internal {
+    function _recordSpend(address account, address token, uint128 amount) internal {
         Spend storage spend = spends[account][token];
-        if (block.timestamp >= spend.windowStart + 1 days) {
-            spend.windowStart = uint48(block.timestamp);
-            spend.amount = amount;
+        if (block.timestamp >= uint256(spend.windowStart) + 1 days) {
+            spends[account][token] = Spend(amount, uint48(block.timestamp));
         } else {
             spend.amount += amount;
         }
@@ -225,13 +227,14 @@ contract VoicePolicy is IValidator {
 
     // --- ERC-7579 plumbing -----------------------------------------------------------------
 
-    function onInstall(bytes calldata) external override {
-        installed[msg.sender] = true;
-    }
+    /// @dev This account binds its validator at construction rather than installing it, so these
+    ///      two exist for the interface and answer about the session, which is the thing that
+    ///      actually makes the module usable for an account.
+    function onInstall(bytes calldata) external override {}
 
     function onUninstall(bytes calldata) external override {
-        delete installed[msg.sender];
         delete sessions[msg.sender];
+        emit SessionRevoked(msg.sender);
     }
 
     function isModuleType(uint256 moduleTypeId) external pure override returns (bool) {
@@ -239,7 +242,7 @@ contract VoicePolicy is IValidator {
     }
 
     function isInitialized(address account) external view override returns (bool) {
-        return installed[account];
+        return sessions[account].key != address(0);
     }
 
     /// @notice This module never validates a plain signature. Orders go through userOps only.
