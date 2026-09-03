@@ -74,20 +74,30 @@ Cost of this choice: a daily cap of 5,000 USDC and a daily cap of 2 WETH are sep
 do not know about each other, so a determined attacker inside the fence can spend both. That is
 acceptable, and it is stated in the threat model rather than hidden.
 
-### 3.2 CoW orders are placed by an explicit gate call, not by pre-signature on a raw uid
+### 3.2 The account presigns its own orders, and `placeOrder` lives on the account
 
 The problem: `GPv2Settlement.setPreSignature(bytes orderUid, bool)` takes only a uid. A uid is
 `orderDigest || owner || validTo`. The validator cannot recover the sell token, the buy token, the
 amount or the floor from it, so it cannot enforce anything.
 
-The fix: the account calls a thin contract, `VoiceOrderGate.placeOrder(Order calldata o)`.
-The gate recomputes the CoW EIP-712 digest from the struct, builds the uid, and calls
-`setPreSignature`. Because the full order struct is in the calldata, the validator decodes it and
-checks real fields. `VoiceOrderGate` is the only address the validator will ever allow as a target.
+**Corrected 2026-09-03, after the first version reverted on Base.** This section originally called
+for a thin translator contract, `VoiceOrderGate.placeOrder(Order calldata o)`, that the account
+would call. That cannot work. `setPreSignature` reads the owner out of the uid and requires it to be
+`msg.sender`, so only the order's own owner may presign it. A helper contract calling on the
+account's behalf reverts with `GPv2: cannot presign order`. The mock settlement in the test suite
+did not enforce this, which is why forty one tests passed on a design that could never work; the
+mock now enforces it and `test/Live.t.sol` proves the point against the deployed settlement.
 
-The gate holds no funds, has no owner, and has no state. It is a pure translator. It is in the
-trusted computing base only in the sense that a bug in it could let a malformed order through, so it
-gets the same hostile test suite as the validator.
+The fix: `placeOrder` is a function on `VesperAccount`, and the user operation calls it directly.
+The full order struct is still in the calldata where the validator decodes it, and the account is
+now the caller the settlement sees.
+
+Folding it in also removes the general `execute` entry point and the ERC-7579 envelope around it.
+That is the larger win. A user operation can now do exactly one thing, and that remains true even if
+the validator is wrong about something, because the account answers no other selector and has no
+fallback. It also deletes the hand-written calldata decoder that had already produced one offset
+bug: the order arrives as a plain external argument, so the validator and the account both read it
+through the compiler's decoder and cannot disagree about what it says.
 
 ERC-1271 signing is the v2 path, needed for partially fillable and TWAP-style orders.
 
@@ -151,7 +161,7 @@ in the same process as the transcript with no serialization in between.
   Alternative considered: Biconomy Nexus with Rhinestone ModuleKit. Kernel wins on bundler and
   paymaster ergonomics, which matters when the demo is on a conference wifi.
 - **`VoicePolicy`**, a validator module. About thirty lines decide whether any of this is safe.
-- **`VoiceOrderGate`**, the only permitted target.
+- **`VesperAccount.placeOrder`**, the only thing a user operation can reach.
 
 ## 5. One swap, boundary by boundary
 
@@ -244,40 +254,23 @@ dead. It is not a warning triangle someone can click past.
 
 ## 8. VoicePolicy
 
-```solidity
-function validateUserOp(PackedUserOperation calldata op, bytes32 opHash)
-    external returns (uint256)
-{
-    Session storage s = sessions[op.sender];
-    if (s.key == address(0))                        return SIG_FAIL;  // revoked or never registered
-    if (s.attestationHash != expectedHash)          return SIG_FAIL;  // not the image you approved
-    if (block.timestamp > s.expiry)                 return SIG_FAIL;  // the key aged out
+The shipped version is `contracts/src/VoicePolicy.sol`. It differs from the sketch this section
+originally carried in four ways, each of which is a correction rather than a refinement:
 
-    (address target, bytes calldata data) = decodeCall(op.callData);
-    if (target != VOICE_ORDER_GATE)                 return SIG_FAIL;  // one address in the world
-
-    Order memory o = decodeOrder(data);
-    Limits storage L = allowlist[op.sender][o.sellToken];
-    if (!L.allowed)                                 return SIG_FAIL;
-    if (!allowlist[op.sender][o.buyToken].allowed)  return SIG_FAIL;
-    if (o.sellAmount > L.perTradeCap)               return SIG_FAIL;
-    if (spentToday(op.sender, o.sellToken) + o.sellAmount > L.dailyCap) return SIG_FAIL;
-
-    (bytes memory sessionSig, bool hasAssert, WebAuthn memory a) = decodeSig(op.signature);
-    if (!verifySecp256k1(opHash, sessionSig, s.key)) return SIG_FAIL;
-
-    if (o.sellAmount > L.biometricThreshold) {
-        if (!hasAssert)                             return SIG_FAIL;
-        if (!a.userVerified)                        return SIG_FAIL;  // the check people forget
-        if (a.rpIdHash != s.rpIdHash)               return SIG_FAIL;
-        if (a.challenge != keccak256(abi.encode(o))) return SIG_FAIL; // binds face to THIS order
-        if (!verifyP256(a, s.passkeyPubKey))        return SIG_FAIL;  // RIP-7212, FCL fallback
-    }
-
-    recordSpend(op.sender, o.sellToken, o.sellAmount);
-    return SIG_OK;
-}
-```
+- **There is no `attestationHash` comparison.** The sketch had one, and it cannot exist. Verifying a
+  TDX quote on chain is not affordable, so nothing in the contract can confirm that a session key
+  was really generated inside the approved image. The field is still stored, as the record of what
+  the owner believed when they registered the key, and the contract says so in a comment. Whoever
+  registers the key is trusted to have checked the quote off chain. Leaving the sketch's check in
+  the spec while the contract could not perform it was the worst of the available options.
+- **There is no target check**, because there is no target to check. The user operation's calldata
+  is a `placeOrder` call and the EntryPoint always executes it on `op.sender`, so the target is the
+  account by construction. What is checked instead is the shape: the calldata must be exactly the
+  selector plus a 384 byte order, and nothing else.
+- **`feeAmount` must be zero.** The settlement takes `sellAmount + feeAmount` from the account for a
+  fill-or-kill sale, so a cap that reads only `sellAmount` is not a cap at all.
+- **The caller must be the account.** Without it a stranger replays an observed signature against
+  fabricated order fields and burns the daily budget without ever executing anything.
 
 Everything upstream, all the audio and the model and the enclave, exists to make the inputs to those
 thirty lines trustworthy enough to be worth checking. Build and attack this before anything else.
@@ -325,7 +318,7 @@ Trusted computing base, written out honestly:
 | Intel silicon and certs | the enclave is real and sealed | the key is readable, though caps and passkey still hold |
 | Phala hardware | genuine TDX, not emulated | same as above |
 | your own image | that the code inside is correct | the measurement proves it did not change, not that it is good |
-| `VoicePolicy` and `VoiceOrderGate` | the thirty lines in section 8 | total loss up to the account balance. Audit these first |
+| `VoicePolicy` and `VesperAccount` | the thirty lines in section 8 | total loss up to the account balance. Audit these first |
 | CoW and its solvers | settling at or above the floor | bounded: the contract enforces the floor, so the risk is a missed fill |
 | Deepgram and Cartesia | confidentiality, and the words the model reads | your voice is heard, and a corrupted transcript reaches the model and then the read-back. You are the check on that |
 | the bundler | inclusion only | delay or censorship, never a different trade |
@@ -374,23 +367,30 @@ Done when: an invented token, a fractional base unit, a sell token equal to the 
 or negative amount, a non-sale action and an unparseable floor all produce nothing, under `pytest`,
 with no network call in the suite.
 
-**Step 2. `VoicePolicy` and `VoiceOrderGate`. DONE 2026-09-03.** Foundry, EntryPoint v0.7,
-`PackedUserOperation`. 41 tests.
+**Step 2. `VoicePolicy` and the account. DONE 2026-09-03.** Foundry, EntryPoint v0.7,
+`PackedUserOperation`. See section 3.2 for why `VoiceOrderGate` no longer exists.
 Done when: every check has a test that fails when that check is deleted. Checked rather than
 claimed, by `contracts/script/mutation_report.py`, which deletes each guard in turn and runs the
-suite. 23 of 25 caught; the two that cannot be are redundant by construction and the report carries
-the argument for each. Not yet deployed to Base Sepolia, which happens with step 3.
+suite. 32 of 33 caught; the one that cannot be is redundant by construction and the report carries
+the argument.
 
-**Step 3. The account on chain, one trade signed by hand.** No voice, no enclave. Kernel v3 account,
-modules installed, allowlist and caps set from a script, one CoW order placed through the gate.
+**Step 3. The account on chain, one trade signed by hand.** No voice, no enclave. Allowlist and caps
+set from a script, one CoW order presigned by the account itself.
 Done when: a fill on CoW that respected a floor you set, with the transaction hash in the repo.
-This step spends real money on Base, roughly 20 to 50 dollars total, because CoW testnet solver
-liquidity is not reliable enough to prove anything.
+
+The cost estimate in the first draft of this plan, twenty to fifty dollars, was wrong by two orders
+of magnitude: deployment on Base is about ten cents and a trade is a few more. What the estimate was
+really pricing was the expectation of getting it wrong repeatedly on chain. That is what
+`test/Live.t.sol` is for. It runs the whole path against Base at a pinned block, using the deployed
+EntryPoint, the deployed settlement and the deployed P-256 precompile, and it found two bugs that
+had already cost one reverted transaction each. **Nothing is deployed with real money again until it
+has passed there.**
 
 **Step 4. The passkey path.** WebAuthn registration on the handset page, assertion over an order
 hash, verified onchain.
 Done when: a trade above the threshold succeeds with an assertion and the identical trade fails
-without one, both onchain, both linked in the repo.
+without one, both onchain, both linked in the repo. Both already hold on the fork, against a real
+P-256 signature that Base's own precompile verified.
 
 **Step 5. The enclave, empty at first.** dstack deployment, attestation service, session key
 generated on boot, handset pinning and the four-word code. No audio yet.
@@ -416,7 +416,7 @@ The trade working is the least interesting thing here. Everyone has seen a trade
 
 ```
 vesper/
-  contracts/          Foundry. VoicePolicy.sol, VoiceOrderGate.sol, hostile tests
+  contracts/          Foundry. VoicePolicy.sol, VesperAccount.sol, hostile tests
   enclave/            Python. model.py, order.py, cli.py, web.py, agent worker, attestation service
   app/                Next.js. / is the console, /handset is the phone page
   scripts/            deploy, set allowlist, register session key, revoke
