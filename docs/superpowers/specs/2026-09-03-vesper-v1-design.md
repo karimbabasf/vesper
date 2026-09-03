@@ -374,10 +374,12 @@ Done when: an invented token, a fractional base unit, a sell token equal to the 
 or negative amount, a non-sale action and an unparseable floor all produce nothing, under `pytest`,
 with no network call in the suite.
 
-**Step 2. `VoicePolicy` and `VoiceOrderGate`, with tests written to attack them.** Foundry, local
-and Base Sepolia. Target EntryPoint v0.7, `PackedUserOperation`.
-Done when: every line of the function in section 8 has a test that fails when that line is deleted.
-That is the completion criterion, and it is checkable by deleting lines.
+**Step 2. `VoicePolicy` and `VoiceOrderGate`. DONE 2026-09-03.** Foundry, EntryPoint v0.7,
+`PackedUserOperation`. 41 tests.
+Done when: every check has a test that fails when that check is deleted. Checked rather than
+claimed, by `contracts/script/mutation_report.py`, which deletes each guard in turn and runs the
+suite. 23 of 25 caught; the two that cannot be are redundant by construction and the report carries
+the argument for each. Not yet deployed to Base Sepolia, which happens with step 3.
 
 **Step 3. The account on chain, one trade signed by hand.** No voice, no enclave. Kernel v3 account,
 modules installed, allowlist and caps set from a script, one CoW order placed through the gate.
