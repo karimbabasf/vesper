@@ -124,6 +124,60 @@ contract DrainsTest is Test {
         assertEq(_validate(_op(1_000e6)), SIG_FAIL);
     }
 
+    function test_refuses_a_priority_fee_above_the_ceiling() public {
+        PackedUserOperation memory op = _op(1_000e6);
+        op.gasFees = bytes32(((policy.MAX_FEE_PER_GAS() + 1) << 128) | uint256(0.05 gwei));
+
+        assertEq(_validate(_resign(op)), SIG_FAIL);
+    }
+
+    function test_refuses_an_order_that_sells_nothing() public {
+        GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 0);
+
+        assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(order), ""))), SIG_FAIL);
+    }
+
+    /// @dev The budget leaks at a fixed rate, so writing to the ledger does not slow it down.
+    ///
+    /// Draining in proportion to what was left meant every write re-based the decay from a smaller
+    /// number, and an attacker holding the session key could keep the owner's budget suppressed
+    /// for as long as they cared to by placing trades worth one unit. Twelve of them here, an hour
+    /// apart, and the budget still comes back exactly on time.
+    function test_spending_nothing_repeatedly_does_not_slow_the_refill() public {
+        _noFaceNeeded(USDC);
+        // This suite keeps the ether budget at three operations on purpose, so the gas drain test
+        // can run out of it. This one is about the token ledger and needs room to move.
+        vm.prank(account);
+        policy.setLimits(
+            address(0),
+            VoicePolicy.Limits({
+                perTradeCap: uint128(Fixtures.maxCost()),
+                dailyCap: type(uint128).max,
+                biometricThreshold: type(uint128).max,
+                allowed: true
+            })
+        );
+        for (uint256 i = 0; i < 10; i++) {
+            assertEq(_validate(_op(DAILY / 10)), SIG_OK);
+        }
+        assertEq(policy.remainingToday(account, USDC), 0);
+
+        uint256 start = block.timestamp;
+        for (uint256 hour = 1; hour <= 12; hour++) {
+            vm.warp(start + hour * 1 hours);
+            assertEq(_validate(_op(1)), SIG_OK, "a one unit trade should always fit");
+        }
+
+        // Half a day gone, so half the budget back. The slack is the twelve units actually spent
+        // plus one truncated unit per rebase, against a cap of twenty billion.
+        assertApproxEqAbs(policy.remainingToday(account, USDC), DAILY / 2, 32);
+
+        // A full day after the last of them, and not a unit missing. Under the old drain the
+        // twelve rebases left a residue that took days to clear.
+        vm.warp(start + 12 hours + 24 hours);
+        assertEq(policy.remainingToday(account, USDC), DAILY);
+    }
+
     // --- the price -----------------------------------------------------------------------------
 
     /// @dev CoW's only on-chain guarantee is the limit price written into the order, and the key
@@ -151,6 +205,36 @@ contract DrainsTest is Test {
 
     /// @dev A pair the owner has not priced is not a pair the fence can protect, so it is refused
     ///      rather than waved through at whatever price the model asked for.
+    /// @dev The floor is compared by cross multiplying rather than by dividing, so a requirement
+    ///      with a fractional part is not rounded down to the owner's disadvantage.
+    ///
+    /// Here the owner's ratio asks for 2.7 buy units. Written as
+    /// `buyAmount < sellAmount * floor / 1e18` the requirement becomes 2, and two units clears a
+    /// floor of 2.7. It is one base unit of dust per trade, which is why this is small, but the
+    /// exact comparison costs nothing and it is the difference between a floor that means what it
+    /// says and one that means whatever the integer division left of it.
+    function test_a_floor_is_not_rounded_down_to_the_next_whole_unit() public {
+        vm.prank(account);
+        policy.setFloor(USDC, WETH, 2_700_000_000);
+
+        GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 1e9);
+        assertEq((uint256(1e9) * 2_700_000_000) / 1e18, 2, "the division no longer rounds to two");
+
+        order.buyAmount = 2; // what dividing would have accepted
+        assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(order), ""))), SIG_FAIL);
+
+        order.buyAmount = 3; // the first amount that really clears 2.7
+        assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(order), ""))), SIG_OK);
+    }
+
+    /// @dev The bound that keeps the price comparison from overflowing.
+    function test_refuses_a_buy_amount_no_token_could_have() public {
+        GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 1_000e6);
+        order.buyAmount = uint256(type(uint128).max) + 1;
+
+        assertEq(_validate(_sign(Fixtures.userOp(account, Fixtures.placeOrderCall(order), ""))), SIG_FAIL);
+    }
+
     function test_refuses_a_pair_the_owner_never_priced() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, CBBTC, 1_000e6);
 
@@ -182,20 +266,38 @@ contract DrainsTest is Test {
         assertEq(_validate(op), SIG_OK);
     }
 
-    /// @dev The assertion is bound to the operation, not only to the order, so an approval cannot
-    ///      be reused for a second operation carrying the same order.
-    function test_an_approval_does_not_carry_to_another_operation() public {
+    /// @dev The assertion is bound to the operation, not only to the order.
+    ///
+    /// Written as an approval over the old challenge, `keccak256(abi.encode(order))`, and asserted
+    /// to be refused. That is the shape that matters: it is the exact thing the previous version
+    /// accepted, so this test is red on that version and green on this one. The first attempt at
+    /// this test built the assertion over the new challenge and submitted it against a different
+    /// operation, which fails on both versions and therefore says nothing at all.
+    function test_an_approval_over_the_order_alone_is_no_longer_enough() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, FACE_ABOVE + 1);
-        Assertion memory forThisOp =
+        Assertion memory boundToTheOrderOnly = Passkey.assertionFor(keccak256(abi.encode(order)));
+
+        PackedUserOperation memory op =
+            Fixtures.userOp(account, Fixtures.placeOrderCall(order), "");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sessionPk, _ethSigned(keccak256("op")));
+        op.signature = Fixtures.signature(abi.encodePacked(r, s, v), boundToTheOrderOnly);
+
+        assertEq(_validate(op), SIG_FAIL);
+    }
+
+    /// @dev And the same approval, bound properly, still works. Without this the test above would
+    ///      pass if the passkey path were broken outright.
+    function test_an_approval_over_the_order_inside_its_operation_is() public {
+        GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, FACE_ABOVE + 1);
+        Assertion memory bound =
             Passkey.assertionFor(keccak256(abi.encode(order, keccak256("op"))));
 
-        PackedUserOperation memory other =
+        PackedUserOperation memory op =
             Fixtures.userOp(account, Fixtures.placeOrderCall(order), "");
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sessionPk, _ethSigned(keccak256("another op")));
-        other.signature = Fixtures.signature(abi.encodePacked(r, s, v), forThisOp);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sessionPk, _ethSigned(keccak256("op")));
+        op.signature = Fixtures.signature(abi.encodePacked(r, s, v), bound);
 
-        vm.prank(account);
-        assertEq(policy.validateUserOp(other, keccak256("another op")), SIG_FAIL);
+        assertEq(_validate(op), SIG_OK);
     }
 
     // --- SIG_OK has to mean the call goes through ----------------------------------------------
@@ -343,6 +445,19 @@ contract DrainsTest is Test {
     }
 
     // --- helpers -------------------------------------------------------------------------------
+
+    function _noFaceNeeded(address token) private {
+        vm.prank(account);
+        policy.setLimits(
+            token,
+            VoicePolicy.Limits({
+                perTradeCap: PER_TRADE,
+                dailyCap: DAILY,
+                biometricThreshold: type(uint128).max,
+                allowed: true
+            })
+        );
+    }
 
     function _allow(address token, uint128 face) private {
         policy.setLimits(

@@ -37,9 +37,20 @@ contract Setup is Script {
     uint128 constant WETH_FACE_ABOVE = 0.002 ether;
 
     /// @dev Gas is ether leaving the account, and the operation asks for its own gas, so it gets a
-    ///      budget like anything else. One operation at the enclave's settings costs about
-    ///      0.00018 ether at the price it asks for, which is far above what it actually pays.
-    uint128 constant GAS_PER_OPERATION = 0.0005 ether;
+    ///      budget like anything else.
+    ///
+    ///      The budget is charged what the operation could cost, not what it did, because at
+    ///      validation time nothing knows the second number. On Base that over-meters by a lot:
+    ///      the enclave asks for 0.05 gwei and the chain charges around 0.006. So the failure mode
+    ///      the ether budget creates is a freeze rather than a drain. A stolen key can exhaust it
+    ///      in a handful of maximum-gas operations and then nothing trades, including the owner's
+    ///      own operator, until it refills. That is recoverable in one ownerCall and losing a day
+    ///      of trading beats losing the ether, but it is a real change of failure mode and it is
+    ///      written down here rather than discovered.
+    ///
+    ///      Per operation is set just above what one real operation charges, so an attacker cannot
+    ///      spend the day's budget faster than the operator would.
+    uint128 constant GAS_PER_OPERATION = 0.00006 ether;
     uint128 constant GAS_DAILY = 0.002 ether;
 
     /// @dev The worst price the owner will accept, in buy base units per 1e18 sell base units.
@@ -126,6 +137,11 @@ contract Setup is Script {
                     VoicePolicy.Limits({
                         perTradeCap: GAS_PER_OPERATION,
                         dailyCap: GAS_DAILY,
+                        // Deliberately out of reach. The passkey gates the sell token's spend,
+                        // and gas is not a sell token, so the ether budget is face-free by
+                        // construction: it is a loss limit, not something a human approves.
+                        // Asking for a face to pay for gas would mean no unattended operation at
+                        // all, which is the whole product.
                         biometricThreshold: type(uint128).max,
                         allowed: true
                     })
@@ -165,5 +181,9 @@ contract Setup is Script {
         console.log("account eth  ", address(account).balance);
         console.log("account weth ", IWETH(WETH).balanceOf(address(account)));
         console.log("session key  ", sessionKey);
+        console.log("");
+        console.log("The passkey is registered as zero, so nothing above the face threshold can");
+        console.log("trade until a real one is set up from the console. That is the fence failing");
+        console.log("closed, not a bug.");
     }
 }

@@ -263,8 +263,8 @@ contract LiveTest is Test {
             initCode: "",
             callData: abi.encodeCall(IVesperAccount.placeOrder, (order)),
             accountGasLimits: bytes32((uint256(400_000) << 128) | uint256(400_000)),
-            preVerificationGas: 120_000,
-            gasFees: bytes32((uint256(2_000_000) << 128) | uint256(200_000_000)),
+            preVerificationGas: 60_000,
+            gasFees: bytes32((uint256(2_000_000) << 128) | uint256(50_000_000)),
             paymasterAndData: "",
             signature: ""
         });

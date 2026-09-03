@@ -3,42 +3,44 @@
 Each check below was replaced with an empty block and the suite was run. `caught` means a
 test failed, which is the only evidence that the check is doing anything.
 
-52 of 53 checks are caught by a test. 1 cannot be, with reasons below.
+53 of 55 checks are caught by a test. 2 cannot be, with reasons below.
 
 | File | Line | Check | Result |
 |---|---|---|---|
-| `src/VoicePolicy.sol` | 150 | `if (msg.sender != op.sender) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 158 | `if (op.callData.length != 4 + GPv2Order.ENCODED_LENGTH) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 159 | `if (bytes4(op.callData) != IVesperAccount.placeOrder.selector) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 164 | `if (op.paymasterAndData.length != 0) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 167 | `if (!gasFieldsOk) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 177 | `if (!_wellFormed(order, op.sender)) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 182 | `if (key == address(0)) return SIG_FAIL;` | exempt |
-| `src/VoicePolicy.sol` | 183 | `if (block.timestamp > expiry) return SIG_FAIL; // the key has aged out` | caught |
-| `src/VoicePolicy.sol` | 186 | `if (!sellLimits.allowed) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 187 | `if (!limits[op.sender][order.buyToken].allowed) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 191 | `if (order.sellAmount > sellLimits.perTradeCap) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 194 | `if (spent + order.sellAmount > sellLimits.dailyCap) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 200 | `if (floor == 0) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 202 | `if (order.buyAmount < (order.sellAmount * floor) / 1e18) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 208 | `if (!gasLimits.allowed) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 209 | `if (maxCost > gasLimits.perTradeCap) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 210 | `if (gasSpent + maxCost > gasLimits.dailyCap) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 216 | `if (!_signaturesOk(op, opHash, key, order, needsFace)) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 253 | `if (order.kind != GPv2Order.KIND_SELL) return false;` | caught |
-| `src/VoicePolicy.sol` | 254 | `if (order.partiallyFillable) return false;` | caught |
-| `src/VoicePolicy.sol` | 258 | `) return false;` | caught |
-| `src/VoicePolicy.sol` | 259 | `if (order.receiver != account) return false;` | caught |
-| `src/VoicePolicy.sol` | 260 | `if (order.buyAmount == 0) return false;` | caught |
-| `src/VoicePolicy.sol` | 264 | `if (order.sellToken == ETH || order.buyToken == ETH) return false;` | caught |
-| `src/VoicePolicy.sol` | 268 | `if (order.feeAmount != 0) return false;` | caught |
-| `src/VoicePolicy.sol` | 270 | `if (order.sellToken == order.buyToken) return false;` | caught |
-| `src/VoicePolicy.sol` | 272 | `if (order.validTo <= block.timestamp) return false;` | caught |
-| `src/VoicePolicy.sol` | 273 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) return false;` | caught |
-| `src/VoicePolicy.sol` | 288 | `if (!_validSessionSignature(opHash, sessionSig, key)) return false;` | caught |
-| `src/VoicePolicy.sol` | 290 | `if (!hasAssertion) return false;` | caught |
-| `src/VoicePolicy.sol` | 332 | `if (signature.length != 65) return false;` | caught |
-| `src/VoicePolicy.sol` | 343 | `return false;` | caught |
+| `src/VoicePolicy.sol` | 153 | `if (msg.sender != op.sender) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 161 | `if (op.callData.length != 4 + GPv2Order.ENCODED_LENGTH) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 162 | `if (bytes4(op.callData) != IVesperAccount.placeOrder.selector) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 167 | `if (op.paymasterAndData.length != 0) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 170 | `if (!gasFieldsOk) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 180 | `if (!_wellFormed(order, op.sender)) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 185 | `if (key == address(0)) return SIG_FAIL;` | exempt |
+| `src/VoicePolicy.sol` | 186 | `if (block.timestamp > expiry) return SIG_FAIL; // the key has aged out` | caught |
+| `src/VoicePolicy.sol` | 189 | `if (!sellLimits.allowed) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 190 | `if (!limits[op.sender][order.buyToken].allowed) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 194 | `if (order.sellAmount > sellLimits.perTradeCap) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 197 | `if (spent + order.sellAmount > sellLimits.dailyCap) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 203 | `if (floor == 0) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 212 | `if (order.buyAmount * 1e18 < order.sellAmount * floor) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 218 | `if (!gasLimits.allowed) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 219 | `if (maxCost > gasLimits.perTradeCap) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 220 | `if (gasSpent + maxCost > gasLimits.dailyCap) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 233 | `if (!_signaturesOk(op, opHash, key, order, needsFace)) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 278 | `if (order.kind != GPv2Order.KIND_SELL) return false;` | caught |
+| `src/VoicePolicy.sol` | 279 | `if (order.partiallyFillable) return false;` | caught |
+| `src/VoicePolicy.sol` | 283 | `) return false;` | caught |
+| `src/VoicePolicy.sol` | 284 | `if (order.receiver != account) return false;` | caught |
+| `src/VoicePolicy.sol` | 287 | `if (order.sellAmount == 0) return false;` | caught |
+| `src/VoicePolicy.sol` | 288 | `if (order.buyAmount == 0) return false;` | exempt |
+| `src/VoicePolicy.sol` | 291 | `if (order.buyAmount > type(uint128).max) return false;` | caught |
+| `src/VoicePolicy.sol` | 295 | `if (order.sellToken == ETH || order.buyToken == ETH) return false;` | caught |
+| `src/VoicePolicy.sol` | 299 | `if (order.feeAmount != 0) return false;` | caught |
+| `src/VoicePolicy.sol` | 301 | `if (order.sellToken == order.buyToken) return false;` | caught |
+| `src/VoicePolicy.sol` | 303 | `if (order.validTo <= block.timestamp) return false;` | caught |
+| `src/VoicePolicy.sol` | 304 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) return false;` | caught |
+| `src/VoicePolicy.sol` | 319 | `if (!_validSessionSignature(opHash, sessionSig, key)) return false;` | caught |
+| `src/VoicePolicy.sol` | 321 | `if (!hasAssertion) return false;` | caught |
+| `src/VoicePolicy.sol` | 363 | `if (signature.length != 65) return false;` | caught |
+| `src/VoicePolicy.sol` | 374 | `return false;` | caught |
 | `src/VesperAccount.sol` | 65 | `) revert ZeroAddress();` | caught |
 | `src/VesperAccount.sol` | 82 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
 | `src/VesperAccount.sol` | 107 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
@@ -63,4 +65,5 @@ test failed, which is the only evidence that the check is doing anything.
 
 ## Why the exempt checks cannot be caught
 
-- `src/VoicePolicy.sol:182` redundant by construction: ecrecover returns address(0) on failure and _validSessionSignature rejects that, so a zero session key can never validate. The line is here so the revoked case reads plainly at the top of the function.
+- `src/VoicePolicy.sol:185` redundant by construction: ecrecover returns address(0) on failure and _validSessionSignature rejects that, so a zero session key can never validate. The line is here so the revoked case reads plainly at the top of the function.
+- `src/VoicePolicy.sol:288` implied by the price floor two checks later: floor is at least one and sellAmount is at least one, so a zero buyAmount always fails buyAmount * 1e18 < sellAmount * floor. It stays because _wellFormed is deliberately line for line with VesperAccount.placeOrder, which has no floor check and where the same line is load bearing and tested.

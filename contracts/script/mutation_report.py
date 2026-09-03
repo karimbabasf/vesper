@@ -29,6 +29,12 @@ EXEMPT = {
         "_validSessionSignature rejects that, so a zero session key can never validate. The line "
         "is here so the revoked case reads plainly at the top of the function."
     ),
+    ("src/VoicePolicy.sol", "if (order.buyAmount == 0) return false;"): (
+        "implied by the price floor two checks later: floor is at least one and sellAmount is at "
+        "least one, so a zero buyAmount always fails buyAmount * 1e18 < sellAmount * floor. It "
+        "stays because _wellFormed is deliberately line for line with VesperAccount.placeOrder, "
+        "which has no floor check and where the same line is load bearing and tested."
+    ),
     ("src/VesperAccount.sol", "if (msg.sender != entryPoint) revert NotEntryPoint();"): (
         "appears twice, on validateUserOp and on placeOrder, and the mutation tool cannot tell "
         "them apart by text. Both are covered: test_only_the_entry_point_may_ask_for_validation "

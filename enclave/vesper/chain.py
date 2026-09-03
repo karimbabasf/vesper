@@ -50,8 +50,8 @@ DEADLINE_SECONDS = 300
 # budget even when it costs no gas. maxFeePerGas is the one that matters: Base runs near 0.006 gwei.
 VERIFICATION_GAS = 400_000
 CALL_GAS = 400_000
-PRE_VERIFICATION_GAS = 120_000
-MAX_FEE_WEI = 200_000_000  # 0.2 gwei
+PRE_VERIFICATION_GAS = 60_000
+MAX_FEE_WEI = 50_000_000  # 0.05 gwei, about eight times what Base usually charges
 PRIORITY_FEE_WEI = 2_000_000  # 0.002 gwei
 
 def env(path: Path) -> dict[str, str]:

@@ -73,8 +73,8 @@ library Fixtures {
     // with zero gas fields would be free, and free is not the case worth testing.
     uint256 internal constant VERIFICATION_GAS = 400_000;
     uint256 internal constant CALL_GAS = 400_000;
-    uint256 internal constant PRE_VERIFICATION_GAS = 120_000;
-    uint256 internal constant MAX_FEE = 0.2 gwei;
+    uint256 internal constant PRE_VERIFICATION_GAS = 60_000;
+    uint256 internal constant MAX_FEE = 0.05 gwei;
     uint256 internal constant PRIORITY_FEE = 0.002 gwei;
 
     /// @dev What VoicePolicy will charge against the ether budget for an operation of this shape.

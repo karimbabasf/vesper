@@ -67,7 +67,10 @@ contract VoicePolicy is IValidator {
 
     uint256 public constant MAX_VERIFICATION_GAS = 500_000;
     uint256 public constant MAX_CALL_GAS = 500_000;
-    uint256 public constant MAX_PRE_VERIFICATION_GAS = 200_000;
+    /// @dev Every unit of this is paid in full to whoever submits the bundle, whatever the L1 cost
+    ///      turned out to be, and the submitter of a stolen operation names itself. The operator
+    ///      asks for 60,000 and is its own beneficiary, so for honest use the number is a wash.
+    uint256 public constant MAX_PRE_VERIFICATION_GAS = 100_000;
     /// @dev Base runs around 0.006 gwei. This is over a hundred times that.
     uint256 public constant MAX_FEE_PER_GAS = 1 gwei;
 
@@ -132,7 +135,7 @@ contract VoicePolicy is IValidator {
     /// @notice What is left of today's budget for one token.
     function remainingToday(address account, address token) external view returns (uint256) {
         uint256 cap = limits[account][token].dailyCap;
-        uint256 spent = _spentToday(account, token);
+        uint256 spent = _spentToday(account, token, cap);
         return spent >= cap ? 0 : cap - spent;
     }
 
@@ -190,7 +193,7 @@ contract VoicePolicy is IValidator {
         // a uint128, which is what keeps the sums below from overflowing.
         if (order.sellAmount > sellLimits.perTradeCap) return SIG_FAIL;
         // Read once and carried to _recordSpend below, rather than loading the same slot twice.
-        uint256 spent = _spentToday(op.sender, order.sellToken);
+        uint256 spent = _spentToday(op.sender, order.sellToken, sellLimits.dailyCap);
         if (spent + order.sellAmount > sellLimits.dailyCap) return SIG_FAIL;
 
         {
@@ -198,13 +201,20 @@ contract VoicePolicy is IValidator {
             // An unpriced pair is not a tradeable pair: without a floor the caps bound how much
             // leaves and say nothing about what comes back, and a stolen key writes buyAmount.
             if (floor == 0) return SIG_FAIL;
-            // Both sides are uint128 bounded by the per-trade check above, so this is in range.
-            if (order.buyAmount < (order.sellAmount * floor) / 1e18) return SIG_FAIL;
+            // Cross multiplied rather than divided. Written as buyAmount < sellAmount * floor / 1e18
+            // the requirement rounds down, and it rounds all the way to zero whenever the product
+            // is under 1e18: a floor that was set would quietly mean "any buyAmount at all" for
+            // every trade under some size, and nothing would say which of the two it was doing.
+            //
+            // In range on both sides: sellAmount and floor are each bounded by a uint128, so their
+            // product is at most 2^256 - 2^129 + 1, and buyAmount is bounded to a uint128 by
+            // _wellFormed, so its product with 1e18 is under 2^188.
+            if (order.buyAmount * 1e18 < order.sellAmount * floor) return SIG_FAIL;
         }
 
-        uint256 gasSpent = _spentToday(op.sender, ETH);
+        Limits memory gasLimits = limits[op.sender][ETH];
+        uint256 gasSpent = _spentToday(op.sender, ETH, gasLimits.dailyCap);
         {
-            Limits memory gasLimits = limits[op.sender][ETH];
             if (!gasLimits.allowed) return SIG_FAIL;
             if (maxCost > gasLimits.perTradeCap) return SIG_FAIL;
             if (gasSpent + maxCost > gasLimits.dailyCap) return SIG_FAIL;
@@ -212,6 +222,13 @@ contract VoicePolicy is IValidator {
 
         // Cumulative, not per order. Asking about one order lets a stolen key sit just under the
         // threshold and move the whole daily budget without a face ever being asked for.
+        //
+        // Be exact about what "cumulative" buys, because it is not a hard limit and it is not a
+        // day. It reads the same draining ledger the daily cap does, so twice the threshold moves
+        // per rolling day without a face, for the reason set out on _spentToday. And it is kept per
+        // sell token, because the caps are and there is no price on chain to normalise across them,
+        // so N allowed tokens give N independent allowances. **Set the threshold to what you want
+        // to approve by hand, divided by twice the number of allowed tokens.**
         bool needsFace = spent + order.sellAmount > sellLimits.biometricThreshold;
         if (!_signaturesOk(op, opHash, key, order, needsFace)) return SIG_FAIL;
 
@@ -238,6 +255,14 @@ contract VoicePolicy is IValidator {
         if (callGas > MAX_CALL_GAS) return (false, 0);
         if (op.preVerificationGas > MAX_PRE_VERIFICATION_GAS) return (false, 0);
         if (maxFee > MAX_FEE_PER_GAS) return (false, 0);
+        // The priority word, which this used to ignore. The reservation is computed from
+        // maxFeePerGas, but the EntryPoint pays the beneficiary at
+        // min(maxFeePerGas, basefee + maxPriorityFeePerGas), so the priority word is what decides
+        // how much of the reservation becomes a real transfer to whoever submitted the bundle.
+        // Leaving it unbounded made the realisable loss ninety six times the honest cost while the
+        // reservation stayed the same. This does not change the bound; it closes the gap between
+        // the bound and what an attacker can actually collect.
+        if (uint256(op.gasFees) >> 128 > MAX_FEE_PER_GAS) return (false, 0);
 
         // At most 1.2e6 gas times 1e9 wei. Nowhere near overflowing, and it fits a uint128.
         return (true, (verificationGas + callGas + op.preVerificationGas) * maxFee);
@@ -257,7 +282,13 @@ contract VoicePolicy is IValidator {
                 || order.buyTokenBalance != GPv2Order.BALANCE_ERC20
         ) return false;
         if (order.receiver != account) return false;
+        // Selling nothing clears the per-trade cap, the daily cap and the floor, and still arms
+        // an order and charges the ether budget. Nothing to gain and something to grief.
+        if (order.sellAmount == 0) return false;
         if (order.buyAmount == 0) return false;
+        // No real token has this many base units, and bounding it is what keeps the price
+        // comparison from overflowing.
+        if (order.buyAmount > type(uint128).max) return false;
         // address(0) is the key the ether budget is kept under, so an order naming it as a token
         // would have its token spend and its gas spend written to the same slot, and the second
         // write would erase the first. It is not an ERC-20 either way.
@@ -350,7 +381,7 @@ contract VoicePolicy is IValidator {
 
     uint256 internal constant WINDOW = 1 days;
 
-    /// @dev A bucket of size dailyCap that refills over a day, not a counter that resets.
+    /// @dev A bucket of size dailyCap that refills at a constant rate, not a counter that resets.
     ///
     /// Be exact about what this promises, because the obvious reading is wrong. It is **not** "at
     /// most dailyCap leaves in any twenty four hours". Spend the whole bucket, wait a day while it
@@ -364,12 +395,25 @@ contract VoicePolicy is IValidator {
     /// seconds at a window boundary, which the version this replaced allowed.
     ///
     /// **Set dailyCap to half of what you are willing to lose in a day.**
-    function _spentToday(address account, address token) internal view returns (uint256) {
+    ///
+    /// The refill is `dailyCap` per window in absolute terms, not a fraction of what is recorded.
+    /// That distinction is the whole reason this is written the way it is. Draining proportionally
+    /// meant every write re-based the decay from the amount left at that moment, so an attacker
+    /// holding the session key could keep the owner's budget suppressed indefinitely by spamming
+    /// operations that spend nothing: each one restarted the decay from a smaller number and the
+    /// budget never came back. Leaking at a fixed rate makes a write cost nothing, because the
+    /// amount leaked between two moments depends only on the time between them.
+    function _spentToday(address account, address token, uint256 dailyCap)
+        internal
+        view
+        returns (uint256)
+    {
         Spend memory spend = spends[account][token];
         uint256 elapsed = block.timestamp - spend.windowStart;
         if (elapsed >= WINDOW) return 0;
-        // spend.amount is a uint128 and the factor is under 2^17, so this cannot overflow.
-        return (uint256(spend.amount) * (WINDOW - elapsed)) / WINDOW;
+        // dailyCap is a uint128 and elapsed is under 2^17, so this cannot overflow.
+        uint256 leaked = (dailyCap * elapsed) / WINDOW;
+        return spend.amount > leaked ? spend.amount - leaked : 0;
     }
 
     /// @param drained What _spentToday already said, passed in so the slot is read once.
