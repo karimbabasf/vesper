@@ -3,7 +3,7 @@
 Each check below was replaced with an empty block and the suite was run. `caught` means a
 test failed, which is the only evidence that the check is doing anything.
 
-50 of 51 checks are caught by a test. 1 cannot be, with reasons below.
+51 of 52 checks are caught by a test. 1 cannot be, with reasons below.
 
 | File | Line | Check | Result |
 |---|---|---|---|
@@ -38,18 +38,19 @@ test failed, which is the only evidence that the check is doing anything.
 | `src/VoicePolicy.sol` | 286 | `if (!hasAssertion) return false;` | caught |
 | `src/VoicePolicy.sol` | 328 | `if (signature.length != 65) return false;` | caught |
 | `src/VoicePolicy.sol` | 339 | `return false;` | caught |
-| `src/VesperAccount.sol` | 72 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
-| `src/VesperAccount.sol` | 97 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
-| `src/VesperAccount.sol` | 99 | `if (order.kind != GPv2Order.KIND_SELL) revert NotASale();` | caught |
-| `src/VesperAccount.sol` | 100 | `if (order.partiallyFillable) revert PartialFillsNotSupported();` | caught |
-| `src/VesperAccount.sol` | 104 | `) revert NotErc20Balances();` | caught |
-| `src/VesperAccount.sol` | 107 | `if (order.receiver != address(this)) revert ReceiverMustBeTheAccount();` | caught |
-| `src/VesperAccount.sol` | 110 | `if (order.buyAmount == 0) revert NoFloor();` | caught |
-| `src/VesperAccount.sol` | 117 | `if (order.feeAmount != 0) revert FeeMustBeZero();` | caught |
-| `src/VesperAccount.sol` | 119 | `if (order.validTo <= block.timestamp) revert AlreadyExpired();` | caught |
-| `src/VesperAccount.sol` | 120 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) revert ArmedTooLong();` | caught |
-| `src/VesperAccount.sol` | 123 | `if (order.sellToken == order.buyToken) revert NotASwap();` | caught |
-| `src/VesperAccount.sol` | 139 | `if (msg.sender != owner) revert NotOwner();` | caught |
+| `src/VesperAccount.sol` | 65 | `) revert ZeroAddress();` | caught |
+| `src/VesperAccount.sol` | 82 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
+| `src/VesperAccount.sol` | 107 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
+| `src/VesperAccount.sol` | 109 | `if (order.kind != GPv2Order.KIND_SELL) revert NotASale();` | caught |
+| `src/VesperAccount.sol` | 110 | `if (order.partiallyFillable) revert PartialFillsNotSupported();` | caught |
+| `src/VesperAccount.sol` | 114 | `) revert NotErc20Balances();` | caught |
+| `src/VesperAccount.sol` | 117 | `if (order.receiver != address(this)) revert ReceiverMustBeTheAccount();` | caught |
+| `src/VesperAccount.sol` | 120 | `if (order.buyAmount == 0) revert NoFloor();` | caught |
+| `src/VesperAccount.sol` | 127 | `if (order.feeAmount != 0) revert FeeMustBeZero();` | caught |
+| `src/VesperAccount.sol` | 129 | `if (order.validTo <= block.timestamp) revert AlreadyExpired();` | caught |
+| `src/VesperAccount.sol` | 130 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) revert ArmedTooLong();` | caught |
+| `src/VesperAccount.sol` | 133 | `if (order.sellToken == order.buyToken) revert NotASwap();` | caught |
+| `src/VesperAccount.sol` | 149 | `if (msg.sender != owner) revert NotOwner();` | caught |
 | `src/WebAuthn.sol` | 42 | `if (assertion.authenticatorData.length < 37) return false;` | caught |
 | `src/WebAuthn.sol` | 51 | `if (signedRpIdHash != rpIdHash) return false;` | caught |
 | `src/WebAuthn.sol` | 54 | `if (flags & FLAG_USER_PRESENT == 0) return false;` | caught |

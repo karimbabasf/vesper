@@ -50,6 +50,28 @@ contract VesperAccountTest is Test {
         vm.deal(address(account), 1 ether);
     }
 
+    /// @dev An account whose owner is address(0) has no escape hatch, and the escape hatch is the
+    ///      reason it is safe to fund one at all.
+    function test_refuses_to_be_deployed_without_an_owner() public {
+        vm.expectRevert(VesperAccount.ZeroAddress.selector);
+        new VesperAccount(entryPoint, policy, address(0), settlement);
+    }
+
+    function test_refuses_to_be_deployed_without_an_entry_point() public {
+        vm.expectRevert(VesperAccount.ZeroAddress.selector);
+        new VesperAccount(address(0), policy, owner, settlement);
+    }
+
+    function test_refuses_to_be_deployed_without_a_validator() public {
+        vm.expectRevert(VesperAccount.ZeroAddress.selector);
+        new VesperAccount(entryPoint, VoicePolicy(address(0)), owner, settlement);
+    }
+
+    function test_refuses_to_be_deployed_without_a_settlement() public {
+        vm.expectRevert(VesperAccount.ZeroAddress.selector);
+        new VesperAccount(entryPoint, policy, owner, MockSettlement(address(0)));
+    }
+
     // --- validation -------------------------------------------------------------------------
 
     function test_only_the_entry_point_may_ask_for_validation() public {

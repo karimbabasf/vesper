@@ -45,15 +45,25 @@ contract VesperAccount is IVesperAccount {
     error AlreadyExpired();
     error NotASwap();
     error CallFailed(bytes reason);
+    error ZeroAddress();
 
     /// @dev The uid is emitted whole because it is what cancelling takes, and this is the only
     ///      place it exists. To disarm an order: ownerCall(settlement, 0, setPreSignature(uid,
     ///      false)). Revoking the session key stops new orders and does nothing to armed ones.
+    /// @dev sellToken is indexed because the uid lives only in this event and disarming an order
+    ///      needs it, so somebody one day will be filtering these logs looking for one.
     event OrderPlaced(
-        bytes orderUid, address sellToken, uint256 sellAmount, uint256 floor, uint32 validTo
+        address indexed sellToken, bytes orderUid, uint256 sellAmount, uint256 floor, uint32 validTo
     );
 
     constructor(address entryPoint_, IValidator validator_, address owner_, ISettlement settlement_) {
+        // A zero owner is an account with no way out, which is the one property that makes it safe
+        // to put money in. The others would be obvious immediately; this one would not.
+        if (
+            entryPoint_ == address(0) || address(validator_) == address(0) || owner_ == address(0)
+                || address(settlement_) == address(0)
+        ) revert ZeroAddress();
+
         entryPoint = entryPoint_;
         validator = validator_;
         owner = owner_;
@@ -126,7 +136,7 @@ contract VesperAccount is IVesperAccount {
         settlement.setPreSignature(orderUid, true);
 
         emit OrderPlaced(
-            orderUid, order.sellToken, order.sellAmount, order.buyAmount, order.validTo
+            order.sellToken, orderUid, order.sellAmount, order.buyAmount, order.validTo
         );
     }
 
