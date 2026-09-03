@@ -35,6 +35,16 @@ contract GriefingTest is Test {
                 allowed: true, perTradeCap: 5_000e6, dailyCap: 20_000e6, biometricThreshold: 5_000e6
             })
         );
+        policy.setLimits(
+            address(0),
+            VoicePolicy.Limits({
+                perTradeCap: type(uint128).max,
+                dailyCap: type(uint128).max,
+                biometricThreshold: type(uint128).max,
+                allowed: true
+            })
+        );
+        policy.setFloor(USDC, WETH, 1);
         vm.stopPrank();
     }
 

@@ -3,35 +3,53 @@
 Each check below was replaced with an empty block and the suite was run. `caught` means a
 test failed, which is the only evidence that the check is doing anything.
 
-32 of 33 checks are caught by a test. 1 cannot be, with reasons below.
+50 of 51 checks are caught by a test. 1 cannot be, with reasons below.
 
 | File | Line | Check | Result |
 |---|---|---|---|
-| `src/VoicePolicy.sol` | 112 | `if (msg.sender != op.sender) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 120 | `if (op.callData.length != 4 + GPv2Order.ENCODED_LENGTH) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 121 | `if (bytes4(op.callData) != IVesperAccount.placeOrder.selector) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 130 | `if (key == address(0)) return SIG_FAIL;` | exempt |
-| `src/VoicePolicy.sol` | 131 | `if (block.timestamp > expiry) return SIG_FAIL; // the key has aged out` | caught |
-| `src/VoicePolicy.sol` | 136 | `if (order.feeAmount != 0) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 139 | `if (!sellLimits.allowed) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 140 | `if (!limits[op.sender][order.buyToken].allowed) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 144 | `if (order.sellAmount > sellLimits.perTradeCap) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 147 | `if (spent + order.sellAmount > sellLimits.dailyCap) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 152 | `if (!_validSessionSignature(opHash, sessionSig, key)) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 155 | `if (!hasAssertion) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 165 | `) return SIG_FAIL;` | caught |
-| `src/VoicePolicy.sol` | 201 | `if (signature.length != 65) return false;` | caught |
-| `src/VoicePolicy.sol` | 212 | `return false;` | caught |
-| `src/VesperAccount.sol` | 70 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
-| `src/VesperAccount.sol` | 95 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
-| `src/VesperAccount.sol` | 97 | `if (order.kind != GPv2Order.KIND_SELL) revert NotASale();` | caught |
-| `src/VesperAccount.sol` | 98 | `if (order.partiallyFillable) revert PartialFillsNotSupported();` | caught |
-| `src/VesperAccount.sol` | 102 | `) revert NotErc20Balances();` | caught |
-| `src/VesperAccount.sol` | 105 | `if (order.receiver != address(this)) revert ReceiverMustBeTheAccount();` | caught |
-| `src/VesperAccount.sol` | 108 | `if (order.buyAmount == 0) revert NoFloor();` | caught |
-| `src/VesperAccount.sol` | 115 | `if (order.feeAmount != 0) revert FeeMustBeZero();` | caught |
-| `src/VesperAccount.sol` | 117 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) revert ArmedTooLong();` | caught |
-| `src/VesperAccount.sol` | 133 | `if (msg.sender != owner) revert NotOwner();` | caught |
+| `src/VoicePolicy.sol` | 150 | `if (msg.sender != op.sender) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 158 | `if (op.callData.length != 4 + GPv2Order.ENCODED_LENGTH) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 159 | `if (bytes4(op.callData) != IVesperAccount.placeOrder.selector) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 164 | `if (op.paymasterAndData.length != 0) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 167 | `if (!gasFieldsOk) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 177 | `if (!_wellFormed(order, op.sender)) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 182 | `if (key == address(0)) return SIG_FAIL;` | exempt |
+| `src/VoicePolicy.sol` | 183 | `if (block.timestamp > expiry) return SIG_FAIL; // the key has aged out` | caught |
+| `src/VoicePolicy.sol` | 186 | `if (!sellLimits.allowed) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 187 | `if (!limits[op.sender][order.buyToken].allowed) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 191 | `if (order.sellAmount > sellLimits.perTradeCap) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 194 | `if (spent + order.sellAmount > sellLimits.dailyCap) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 200 | `if (floor == 0) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 202 | `if (order.buyAmount < (order.sellAmount * floor) / 1e18) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 208 | `if (!gasLimits.allowed) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 209 | `if (maxCost > gasLimits.perTradeCap) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 210 | `if (gasSpent + maxCost > gasLimits.dailyCap) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 216 | `if (!_signaturesOk(op, opHash, key, order, needsFace)) return SIG_FAIL;` | caught |
+| `src/VoicePolicy.sol` | 253 | `if (order.kind != GPv2Order.KIND_SELL) return false;` | caught |
+| `src/VoicePolicy.sol` | 254 | `if (order.partiallyFillable) return false;` | caught |
+| `src/VoicePolicy.sol` | 258 | `) return false;` | caught |
+| `src/VoicePolicy.sol` | 259 | `if (order.receiver != account) return false;` | caught |
+| `src/VoicePolicy.sol` | 260 | `if (order.buyAmount == 0) return false;` | caught |
+| `src/VoicePolicy.sol` | 264 | `if (order.feeAmount != 0) return false;` | caught |
+| `src/VoicePolicy.sol` | 266 | `if (order.sellToken == order.buyToken) return false;` | caught |
+| `src/VoicePolicy.sol` | 268 | `if (order.validTo <= block.timestamp) return false;` | caught |
+| `src/VoicePolicy.sol` | 269 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) return false;` | caught |
+| `src/VoicePolicy.sol` | 284 | `if (!_validSessionSignature(opHash, sessionSig, key)) return false;` | caught |
+| `src/VoicePolicy.sol` | 286 | `if (!hasAssertion) return false;` | caught |
+| `src/VoicePolicy.sol` | 328 | `if (signature.length != 65) return false;` | caught |
+| `src/VoicePolicy.sol` | 339 | `return false;` | caught |
+| `src/VesperAccount.sol` | 72 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
+| `src/VesperAccount.sol` | 97 | `if (msg.sender != entryPoint) revert NotEntryPoint();` | caught |
+| `src/VesperAccount.sol` | 99 | `if (order.kind != GPv2Order.KIND_SELL) revert NotASale();` | caught |
+| `src/VesperAccount.sol` | 100 | `if (order.partiallyFillable) revert PartialFillsNotSupported();` | caught |
+| `src/VesperAccount.sol` | 104 | `) revert NotErc20Balances();` | caught |
+| `src/VesperAccount.sol` | 107 | `if (order.receiver != address(this)) revert ReceiverMustBeTheAccount();` | caught |
+| `src/VesperAccount.sol` | 110 | `if (order.buyAmount == 0) revert NoFloor();` | caught |
+| `src/VesperAccount.sol` | 117 | `if (order.feeAmount != 0) revert FeeMustBeZero();` | caught |
+| `src/VesperAccount.sol` | 119 | `if (order.validTo <= block.timestamp) revert AlreadyExpired();` | caught |
+| `src/VesperAccount.sol` | 120 | `if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) revert ArmedTooLong();` | caught |
+| `src/VesperAccount.sol` | 123 | `if (order.sellToken == order.buyToken) revert NotASwap();` | caught |
+| `src/VesperAccount.sol` | 139 | `if (msg.sender != owner) revert NotOwner();` | caught |
 | `src/WebAuthn.sol` | 42 | `if (assertion.authenticatorData.length < 37) return false;` | caught |
 | `src/WebAuthn.sol` | 51 | `if (signedRpIdHash != rpIdHash) return false;` | caught |
 | `src/WebAuthn.sol` | 54 | `if (flags & FLAG_USER_PRESENT == 0) return false;` | caught |
@@ -43,4 +61,4 @@ test failed, which is the only evidence that the check is doing anything.
 
 ## Why the exempt checks cannot be caught
 
-- `src/VoicePolicy.sol:130` redundant by construction: ecrecover returns address(0) on failure and _validSessionSignature rejects that, so a zero session key can never validate. The line is here so the revoked case reads plainly at the top of the function.
+- `src/VoicePolicy.sol:182` redundant by construction: ecrecover returns address(0) on failure and _validSessionSignature rejects that, so a zero session key can never validate. The line is here so the revoked case reads plainly at the top of the function.

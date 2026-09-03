@@ -30,6 +30,16 @@ uint256 constant MODULE_TYPE_VALIDATOR = 1;
 uint256 constant SIG_OK = 0;
 uint256 constant SIG_FAIL = 1;
 
+// How long a presigned order may stay armed.
+//
+// A presignature is an instruction a solver may act on at any point before validTo, and the fence
+// meters orders as they are created rather than as they settle. Without a ceiling a week of daily
+// budgets can be armed and then all settled in one block, and validTo is a uint32 that reaches
+// 2106. Thirty minutes is six times the deadline the enclave asks for, so nothing legitimate
+// touches it. Shared rather than read off the account, because the validator asking the account a
+// question during validation is a call it does not need to make.
+uint256 constant MAX_ORDER_LIFETIME = 30 minutes;
+
 interface IModule {
     function onInstall(bytes calldata data) external;
     function onUninstall(bytes calldata data) external;

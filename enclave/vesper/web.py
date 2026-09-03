@@ -170,10 +170,11 @@ def prepare(request: dict) -> dict:
     )
     floor = None if asked["floor"] is None else int(asked["floor"])
     order = chain.build_order(quoted, live.account, floor)
+    _, op_hash = chain.build_user_op(order, live)
     return {
         "ok": True,
         "order": order,
-        "challenge": chain.order_digest_challenge(order),
+        "challenge": chain.order_digest_challenge(order, op_hash),
         "uid": chain.order_uid(order, live.account),
     }
 

@@ -77,6 +77,18 @@ contract LiveTest is Test {
         );
         policy.setLimits(WETH, _limits());
         policy.setLimits(USDC, _limits());
+        policy.setLimits(
+            address(0),
+            VoicePolicy.Limits({
+                perTradeCap: 0.0005 ether,
+                dailyCap: 0.01 ether,
+                biometricThreshold: type(uint128).max,
+                allowed: true
+            })
+        );
+        // Loose on purpose: these tests are about the path, and the floor has its own suite.
+        policy.setFloor(WETH, USDC, 1);
+        policy.setFloor(USDC, WETH, 1);
         vm.stopPrank();
     }
 
@@ -180,7 +192,7 @@ contract LiveTest is Test {
         GPv2Order.Data memory order = _order(FACE_ABOVE + 1);
         bytes memory uid = _uid(order);
 
-        _run(order, abi.encode(_assertionFor(keccak256(abi.encode(order)))));
+        _run(order, PASSKEY_WANTED);
 
         assertTrue(ISettlement(SETTLEMENT).preSignature(uid) != 0, "settlement did not accept it");
     }
@@ -188,8 +200,12 @@ contract LiveTest is Test {
     function test_a_face_for_one_order_does_not_authorise_another() public {
         GPv2Order.Data memory signed = _order(FACE_ABOVE + 1);
         GPv2Order.Data memory other = _order(FACE_ABOVE + 2);
-        PackedUserOperation[] memory ops =
-            _ops(other, abi.encode(_assertionFor(keccak256(abi.encode(signed)))));
+
+        // A real assertion, really made, for the order next to this one.
+        PackedUserOperation[] memory ops = _ops(other, "");
+        bytes32 opHash = _hashOf(other);
+        ops[0].signature =
+            _sign(other, _assertionFor(keccak256(abi.encode(signed, opHash))), true, opHash);
 
         vm.expectRevert();
         IEntryPoint(ENTRY_POINT).handleOps(ops, payable(owner));
@@ -227,42 +243,74 @@ contract LiveTest is Test {
         return GPv2Order.uid(order, account.domainSeparator(), address(account));
     }
 
-    function _run(GPv2Order.Data memory order, bytes memory encodedAssertion) private {
-        IEntryPoint(ENTRY_POINT).handleOps(_ops(order, encodedAssertion), payable(owner));
+    /// @dev Marker for a run that should carry a passkey. The assertion cannot be built by the
+    ///      caller any more: it signs the order inside its operation, and the operation's hash is
+    ///      not known until the operation exists.
+    bytes constant PASSKEY_WANTED = hex"01";
+
+    function _run(GPv2Order.Data memory order, bytes memory wantPasskey) private {
+        IEntryPoint(ENTRY_POINT).handleOps(_ops(order, wantPasskey), payable(owner));
     }
 
-    /// @dev Builds the operation, asks the real EntryPoint for its hash, signs it with the session
-    ///      key, and attaches the assertion if there is one. Kept separate from submitting it so a
-    ///      test that expects a revert can put the expectation on handleOps and nothing else.
-    function _ops(GPv2Order.Data memory order, bytes memory encodedAssertion)
+    function _unsignedOp(GPv2Order.Data memory order)
         private
-        returns (PackedUserOperation[] memory ops)
+        view
+        returns (PackedUserOperation memory)
     {
-        PackedUserOperation memory op = PackedUserOperation({
+        return PackedUserOperation({
             sender: address(account),
             nonce: IEntryPoint(ENTRY_POINT).getNonce(address(account), 0),
             initCode: "",
             callData: abi.encodeCall(IVesperAccount.placeOrder, (order)),
-            accountGasLimits: bytes32((uint256(400_000) << 128) | uint256(600_000)),
+            accountGasLimits: bytes32((uint256(400_000) << 128) | uint256(400_000)),
             preVerificationGas: 120_000,
             gasFees: bytes32((uint256(2_000_000) << 128) | uint256(200_000_000)),
             paymasterAndData: "",
             signature: ""
         });
+    }
 
+    function _hashOf(GPv2Order.Data memory order) private view returns (bytes32) {
+        return IEntryPoint(ENTRY_POINT).getUserOpHash(_unsignedOp(order));
+    }
+
+    /// @dev The session key signs the operation; the passkey, when one is wanted, signs the order
+    ///      inside it. Kept separate from submitting so a test that expects a revert can put the
+    ///      expectation on handleOps and nothing else.
+    function _ops(GPv2Order.Data memory order, bytes memory wantPasskey)
+        private
+        returns (PackedUserOperation[] memory ops)
+    {
+        PackedUserOperation memory op = _unsignedOp(order);
         bytes32 opHash = IEntryPoint(ENTRY_POINT).getUserOpHash(op);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
-            sessionPk, keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", opHash))
-        );
-        bytes memory sessionSig = abi.encodePacked(r, s, v);
 
         Assertion memory assertion;
-        bool hasAssertion = encodedAssertion.length > 0;
-        if (hasAssertion) assertion = abi.decode(encodedAssertion, (Assertion));
-        op.signature = abi.encode(sessionSig, hasAssertion, assertion);
+        bool hasAssertion = wantPasskey.length > 0;
+        if (hasAssertion) assertion = _assertionFor(keccak256(abi.encode(order, opHash)));
+        op.signature = _sign(order, assertion, hasAssertion, opHash);
 
         ops = new PackedUserOperation[](1);
         ops[0] = op;
+    }
+
+    function _sign(GPv2Order.Data memory order, Assertion memory assertion)
+        private
+        view
+        returns (bytes memory)
+    {
+        return _sign(order, assertion, true, _hashOf(order));
+    }
+
+    function _sign(
+        GPv2Order.Data memory,
+        Assertion memory assertion,
+        bool hasAssertion,
+        bytes32 opHash
+    ) private view returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+            sessionPk, keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", opHash))
+        );
+        return abi.encode(abi.encodePacked(r, s, v), hasAssertion, assertion);
     }
 
     /// @dev A real assertion: a real clientDataJSON, and a real P-256 signature over it that the

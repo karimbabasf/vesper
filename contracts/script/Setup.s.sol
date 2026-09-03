@@ -28,9 +28,27 @@ contract Setup is Script {
 
     /// @dev Deliberately above anything this wallet can afford to trade, so the first end to end
     ///      run needs no passkey. Lowered later to demonstrate the biometric path.
+    ///
+    ///      The daily cap is a bucket that refills over a day, not a counter that resets, so at
+    ///      most twice this can leave in twenty four hours. Set it to half what you would accept
+    ///      losing. VoicePolicy._spentToday explains why no cheap rate limiter does better.
     uint128 constant WETH_PER_TRADE = 0.002 ether;
     uint128 constant WETH_DAILY = 0.005 ether;
     uint128 constant WETH_FACE_ABOVE = 0.002 ether;
+
+    /// @dev Gas is ether leaving the account, and the operation asks for its own gas, so it gets a
+    ///      budget like anything else. One operation at the enclave's settings costs about
+    ///      0.00018 ether at the price it asks for, which is far above what it actually pays.
+    uint128 constant GAS_PER_OPERATION = 0.0005 ether;
+    uint128 constant GAS_DAILY = 0.002 ether;
+
+    /// @dev The worst price the owner will accept, in buy base units per 1e18 sell base units.
+    ///      A manual price, not an oracle: CoW guarantees only the limit price in the order, and
+    ///      the key that writes that limit is the one assumed stolen. Computed 2026-09-03 at about
+    ///      2,400 USDC per WETH, with twenty percent of slack, and it needs refreshing when the
+    ///      price moves further than that. Stale here refuses trades rather than allowing bad ones.
+    uint128 constant FLOOR_WETH_FOR_USDC = 1_920_000_000;
+    uint128 constant FLOOR_USDC_FOR_WETH = 333_333_333_333_333_333_333_333_333;
 
     function run() external {
         uint256 ownerPk = vm.envUint("PRIVATE_KEY");
@@ -102,12 +120,40 @@ contract Setup is Script {
             address(policy),
             0,
             abi.encodeCall(
+                VoicePolicy.setLimits,
+                (
+                    address(0),
+                    VoicePolicy.Limits({
+                        perTradeCap: GAS_PER_OPERATION,
+                        dailyCap: GAS_DAILY,
+                        biometricThreshold: type(uint128).max,
+                        allowed: true
+                    })
+                )
+            )
+        );
+
+        account.ownerCall(
+            address(policy), 0,
+            abi.encodeCall(VoicePolicy.setFloor, (WETH, USDC, FLOOR_WETH_FOR_USDC))
+        );
+        account.ownerCall(
+            address(policy), 0,
+            abi.encodeCall(VoicePolicy.setFloor, (USDC, WETH, FLOOR_USDC_FOR_WETH))
+        );
+
+        account.ownerCall(
+            address(policy),
+            0,
+            abi.encodeCall(
                 VoicePolicy.registerSession,
                 (
                     sessionKey,
                     keccak256("no enclave yet, step 5"),
                     uint48(block.timestamp + 30 days),
-                    keccak256("vesper.local"),
+                    // WebAuthn puts sha256(rpId) in authenticatorData, and rpId is the hostname
+                    // the console is served from. sha256("localhost").
+                    0x49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763,
                     bytes32(0),
                     bytes32(0)
                 )

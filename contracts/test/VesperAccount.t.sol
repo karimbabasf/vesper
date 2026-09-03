@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {GPv2Order, PackedUserOperation, SIG_FAIL, SIG_OK} from "../src/Types.sol";
+import {GPv2Order, MAX_ORDER_LIFETIME, PackedUserOperation, SIG_FAIL, SIG_OK} from "../src/Types.sol";
 import {VesperAccount} from "../src/VesperAccount.sol";
 import {VoicePolicy} from "../src/VoicePolicy.sol";
 import {Fixtures, MockSettlement, PEPE, USDC, WETH} from "./Fixtures.sol";
@@ -34,6 +34,17 @@ contract VesperAccountTest is Test {
         );
         _allow(USDC);
         _allow(WETH);
+        policy.setLimits(
+            address(0),
+            VoicePolicy.Limits({
+                perTradeCap: uint128(Fixtures.maxCost()),
+                dailyCap: uint128(Fixtures.maxCost() * 100),
+                biometricThreshold: type(uint128).max,
+                allowed: true
+            })
+        );
+        policy.setFloor(USDC, WETH, 1);
+        policy.setFloor(WETH, USDC, 1);
         vm.stopPrank();
 
         vm.deal(address(account), 1 ether);
@@ -140,7 +151,7 @@ contract VesperAccountTest is Test {
 
     function test_refuses_an_order_armed_for_longer_than_the_ceiling() public {
         GPv2Order.Data memory order = Fixtures.order(address(account), USDC, WETH, 1_000e6);
-        order.validTo = uint32(block.timestamp + account.MAX_ORDER_LIFETIME() + 1);
+        order.validTo = uint32(block.timestamp + MAX_ORDER_LIFETIME + 1);
 
         vm.prank(entryPoint);
         vm.expectRevert(VesperAccount.ArmedTooLong.selector);
@@ -149,9 +160,26 @@ contract VesperAccountTest is Test {
 
     function test_accepts_an_order_armed_right_up_to_the_ceiling() public {
         GPv2Order.Data memory order = Fixtures.order(address(account), USDC, WETH, 1_000e6);
-        order.validTo = uint32(block.timestamp + account.MAX_ORDER_LIFETIME());
+        order.validTo = uint32(block.timestamp + MAX_ORDER_LIFETIME);
 
         vm.prank(entryPoint);
+        account.placeOrder(order);
+    }
+
+    function test_refuses_an_order_that_has_already_expired() public {
+        GPv2Order.Data memory order = Fixtures.order(address(account), USDC, WETH, 1_000e6);
+        order.validTo = uint32(block.timestamp);
+
+        vm.prank(entryPoint);
+        vm.expectRevert(VesperAccount.AlreadyExpired.selector);
+        account.placeOrder(order);
+    }
+
+    function test_refuses_selling_a_token_for_itself() public {
+        GPv2Order.Data memory order = Fixtures.order(address(account), USDC, USDC, 1_000e6);
+
+        vm.prank(entryPoint);
+        vm.expectRevert(VesperAccount.NotASwap.selector);
         account.placeOrder(order);
     }
 

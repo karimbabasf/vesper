@@ -41,10 +41,12 @@ BALANCE_ERC20 = "0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060
 
 DEADLINE_SECONDS = 300
 
-# Enough for validation plus one setPreSignature, measured on a fork at 195k for the whole
-# operation. Rounded up rather than tuned: the account pays for what it uses, not what it asks for.
+# Enough for validation plus one setPreSignature, measured on a fork at about 230k for the whole
+# operation. VoicePolicy will refuse anything above its own ceilings, and it charges the account's
+# ether budget the worst case these numbers describe, so asking for far more than needed costs
+# budget even when it costs no gas. maxFeePerGas is the one that matters: Base runs near 0.006 gwei.
 VERIFICATION_GAS = 400_000
-CALL_GAS = 600_000
+CALL_GAS = 400_000
 PRE_VERIFICATION_GAS = 120_000
 MAX_FEE_WEI = 200_000_000  # 0.2 gwei
 PRIORITY_FEE_WEI = 2_000_000  # 0.002 gwei
@@ -171,9 +173,14 @@ def order_args(order: dict) -> str:
     )
 
 
-def order_digest_challenge(order: dict) -> str:
-    """keccak256(abi.encode(order)), which is what a passkey has to sign over above the threshold."""
-    encoded = cast("abi-encode", f"f({ORDER_TUPLE})", order_args(order))
+def order_digest_challenge(order: dict, op_hash: str) -> str:
+    """What a passkey signs above the threshold: keccak256(abi.encode(order, opHash)).
+
+    The order alone is not enough. It would let one approval be replayed by any later operation
+    carrying the same order, for as long as the order stayed valid. opHash carries the chain, the
+    EntryPoint, the account and the nonce, so an approval is good for exactly one operation.
+    """
+    encoded = cast("abi-encode", f"f({ORDER_TUPLE},bytes32)", order_args(order), op_hash)
     return cast("keccak", encoded)
 
 

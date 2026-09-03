@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {GPv2Order, ISettlement, IValidator, IVesperAccount, PackedUserOperation} from "./Types.sol";
+import {
+    GPv2Order,
+    ISettlement,
+    IValidator,
+    IVesperAccount,
+    MAX_ORDER_LIFETIME,
+    PackedUserOperation
+} from "./Types.sol";
 
 /// @title VesperAccount
 /// @notice The smallest account that can hold funds and be fenced by VoicePolicy.
@@ -35,6 +42,8 @@ contract VesperAccount is IVesperAccount {
     error NoFloor();
     error FeeMustBeZero();
     error ArmedTooLong();
+    error AlreadyExpired();
+    error NotASwap();
     error CallFailed(bytes reason);
 
     /// @dev The uid is emitted whole because it is what cancelling takes, and this is the only
@@ -43,13 +52,6 @@ contract VesperAccount is IVesperAccount {
     event OrderPlaced(
         bytes orderUid, address sellToken, uint256 sellAmount, uint256 floor, uint32 validTo
     );
-
-    /// @dev A presignature is an armed instruction that a solver may act on at any point before
-    ///      validTo, and the fence meters orders as they are created rather than as they settle.
-    ///      Without a ceiling, a day's worth of caps can be armed and then all settled at once,
-    ///      and a uint32 validTo reaches the year 2106. Thirty minutes is six times the deadline
-    ///      the enclave asks for, so nothing legitimate touches it.
-    uint256 public constant MAX_ORDER_LIFETIME = 30 minutes;
 
     constructor(address entryPoint_, IValidator validator_, address owner_, ISettlement settlement_) {
         entryPoint = entryPoint_;
@@ -114,7 +116,11 @@ contract VesperAccount is IVesperAccount {
         // gets filled.
         if (order.feeAmount != 0) revert FeeMustBeZero();
 
+        if (order.validTo <= block.timestamp) revert AlreadyExpired();
         if (order.validTo > block.timestamp + MAX_ORDER_LIFETIME) revert ArmedTooLong();
+
+        // Selling a token for itself passes every other rule and burns the difference.
+        if (order.sellToken == order.buyToken) revert NotASwap();
 
         orderUid = abi.encodePacked(GPv2Order.hash(order, domainSeparator), address(this), order.validTo);
         settlement.setPreSignature(orderUid, true);

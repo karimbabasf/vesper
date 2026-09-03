@@ -69,6 +69,19 @@ library Fixtures {
         return abi.encodeCall(IVesperAccount.placeOrder, (data));
     }
 
+    // What the enclave actually asks for, well inside VoicePolicy's ceilings. A user operation
+    // with zero gas fields would be free, and free is not the case worth testing.
+    uint256 internal constant VERIFICATION_GAS = 400_000;
+    uint256 internal constant CALL_GAS = 400_000;
+    uint256 internal constant PRE_VERIFICATION_GAS = 120_000;
+    uint256 internal constant MAX_FEE = 0.2 gwei;
+    uint256 internal constant PRIORITY_FEE = 0.002 gwei;
+
+    /// @dev What VoicePolicy will charge against the ether budget for an operation of this shape.
+    function maxCost() internal pure returns (uint256) {
+        return (VERIFICATION_GAS + CALL_GAS + PRE_VERIFICATION_GAS) * MAX_FEE;
+    }
+
     function userOp(address sender, bytes memory opCallData, bytes memory signature)
         internal
         pure
@@ -79,9 +92,9 @@ library Fixtures {
             nonce: 0,
             initCode: "",
             callData: opCallData,
-            accountGasLimits: bytes32(0),
-            preVerificationGas: 0,
-            gasFees: bytes32(0),
+            accountGasLimits: bytes32((VERIFICATION_GAS << 128) | CALL_GAS),
+            preVerificationGas: PRE_VERIFICATION_GAS,
+            gasFees: bytes32((PRIORITY_FEE << 128) | MAX_FEE),
             paymasterAndData: "",
             signature: signature
         });

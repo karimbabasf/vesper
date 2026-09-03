@@ -37,6 +37,10 @@ contract VoicePolicyTest is Test {
         _allow(USDC);
         _allow(WETH);
         _allow(CBBTC);
+        _budgetForGas();
+        _price(USDC, WETH);
+        _price(WETH, USDC);
+        _price(USDC, CBBTC);
         vm.stopPrank();
     }
 
@@ -48,7 +52,7 @@ contract VoicePolicyTest is Test {
 
     function test_a_trade_over_the_face_limit_passes_with_an_assertion() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
-        Assertion memory assertion = Passkey.assertionFor(keccak256(abi.encode(order)));
+        Assertion memory assertion = Passkey.assertionFor(_challenge(order));
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_OK);
     }
@@ -154,6 +158,7 @@ contract VoicePolicyTest is Test {
 
     /// @dev Ten trades at the face limit exactly, which is DAILY, then one more unit.
     function test_refuses_the_trade_that_would_cross_the_daily_cap() public {
+        _noFaceNeeded(USDC);
         for (uint256 i = 0; i < 10; i++) {
             assertEq(_validate(_op(USDC, WETH, FACE_ABOVE)), SIG_OK);
         }
@@ -204,6 +209,7 @@ contract VoicePolicyTest is Test {
     ///      stolen key would take both halves two seconds apart. Draining means the budget only
     ///      ever returns as fast as time passes, so no short interval carries more than one cap.
     function test_the_whole_cap_cannot_be_spent_twice_in_a_moment() public {
+        _noFaceNeeded(USDC);
         _spendTheWholeCap();
         assertEq(policy.remainingToday(account, USDC), 0);
 
@@ -218,6 +224,7 @@ contract VoicePolicyTest is Test {
     /// @dev Proportional the whole way, never in a step. A resetting window reads zero here and
     ///      then jumps, which is the shape this replaces.
     function test_the_budget_comes_back_in_proportion_to_the_time_that_has_passed() public {
+        _noFaceNeeded(USDC);
         _spendTheWholeCap();
 
         vm.warp(block.timestamp + 6 hours);
@@ -282,7 +289,7 @@ contract VoicePolicyTest is Test {
     function test_refuses_an_assertion_made_for_a_different_order() public {
         GPv2Order.Data memory cheap = Fixtures.order(account, USDC, WETH, 2_500e6);
         GPv2Order.Data memory expensive = Fixtures.order(account, USDC, WETH, 5_000e6);
-        Assertion memory forCheap = Passkey.assertionFor(keccak256(abi.encode(cheap)));
+        Assertion memory forCheap = Passkey.assertionFor(_challenge(cheap));
 
         assertEq(_validate(_opWithAssertion(expensive, forCheap)), SIG_FAIL);
     }
@@ -290,7 +297,7 @@ contract VoicePolicyTest is Test {
     function test_refuses_an_assertion_signed_for_another_site() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
         Assertion memory elsewhere = Passkey.assertionFor(
-            keccak256(abi.encode(order)), keccak256("evil.example"), Passkey.UP | Passkey.UV
+            _challenge(order), keccak256("evil.example"), Passkey.UP | Passkey.UV
         );
 
         assertEq(_validate(_opWithAssertion(order, elsewhere)), SIG_FAIL);
@@ -299,14 +306,14 @@ contract VoicePolicyTest is Test {
     function test_refuses_a_tap_without_a_face() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
         Assertion memory tapped =
-            Passkey.assertionFor(keccak256(abi.encode(order)), Passkey.RP_ID_HASH, Passkey.UP);
+            Passkey.assertionFor(_challenge(order), Passkey.RP_ID_HASH, Passkey.UP);
 
         assertEq(_validate(_opWithAssertion(order, tapped)), SIG_FAIL);
     }
 
     function test_refuses_an_assertion_the_curve_does_not_verify() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
-        Assertion memory assertion = Passkey.assertionFor(keccak256(abi.encode(order)));
+        Assertion memory assertion = Passkey.assertionFor(_challenge(order));
         assertion.r = bytes32(uint256(1)); // no mock answers for this input
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
@@ -314,7 +321,7 @@ contract VoicePolicyTest is Test {
 
     function test_refuses_authenticator_data_too_short_to_hold_flags() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
-        Assertion memory assertion = Passkey.assertionFor(keccak256(abi.encode(order)));
+        Assertion memory assertion = Passkey.assertionFor(_challenge(order));
         assertion.authenticatorData = hex"00";
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
@@ -328,7 +335,7 @@ contract VoicePolicyTest is Test {
     function test_refuses_authenticator_data_one_byte_short_of_the_minimum() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
         Assertion memory assertion =
-            Passkey.assertionWithAuthenticatorDataOneByteShort(keccak256(abi.encode(order)));
+            Passkey.assertionWithAuthenticatorDataOneByteShort(_challenge(order));
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
     }
@@ -338,7 +345,7 @@ contract VoicePolicyTest is Test {
     function test_refuses_a_ceremony_that_is_not_an_assertion() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
         Assertion memory assertion =
-            Passkey.assertionOfType(keccak256(abi.encode(order)), "webauthn.create");
+            Passkey.assertionOfType(_challenge(order), "webauthn.create");
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
     }
@@ -355,7 +362,7 @@ contract VoicePolicyTest is Test {
 
     function test_refuses_a_challenge_index_pointing_past_the_end() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
-        Assertion memory assertion = Passkey.assertionFor(keccak256(abi.encode(order)));
+        Assertion memory assertion = Passkey.assertionFor(_challenge(order));
         assertion.challengeIndex = 10_000;
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
@@ -408,14 +415,14 @@ contract VoicePolicyTest is Test {
 
     function test_refuses_over_the_single_trade_cap_even_with_a_good_assertion() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, PER_TRADE + 1);
-        Assertion memory assertion = Passkey.assertionFor(keccak256(abi.encode(order)));
+        Assertion memory assertion = Passkey.assertionFor(_challenge(order));
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
     }
 
     function test_refuses_an_assertion_attached_but_declared_absent() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
-        Assertion memory assertion = Passkey.assertionFor(keccak256(abi.encode(order)));
+        Assertion memory assertion = Passkey.assertionFor(_challenge(order));
 
         PackedUserOperation memory op =
             Fixtures.userOp(account, Fixtures.placeOrderCall(order), "");
@@ -439,7 +446,7 @@ contract VoicePolicyTest is Test {
     function test_refuses_an_assertion_from_an_authenticator_nobody_touched() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
         Assertion memory untouched = Passkey.assertionFor(
-            keccak256(abi.encode(order)), Passkey.RP_ID_HASH, Passkey.UV
+            _challenge(order), Passkey.RP_ID_HASH, Passkey.UV
         );
 
         assertEq(_validate(_opWithAssertion(order, untouched)), SIG_FAIL);
@@ -447,7 +454,7 @@ contract VoicePolicyTest is Test {
 
     function test_refuses_client_data_too_short_to_hold_a_challenge() public {
         GPv2Order.Data memory order = Fixtures.order(account, USDC, WETH, 3_000e6);
-        Assertion memory assertion = Passkey.assertionFor(keccak256(abi.encode(order)));
+        Assertion memory assertion = Passkey.assertionFor(_challenge(order));
         assertion.clientDataJSON = "{}";
 
         assertEq(_validate(_opWithAssertion(order, assertion)), SIG_FAIL);
@@ -463,6 +470,47 @@ contract VoicePolicyTest is Test {
                 perTradeCap: PER_TRADE,
                 dailyCap: DAILY,
                 biometricThreshold: FACE_ABOVE
+            })
+        );
+    }
+
+    /// @dev An ether budget generous enough that no test here trips it by accident. Gas metering
+    ///      has its own tests.
+    function _budgetForGas() private {
+        policy.setLimits(
+            address(0),
+            VoicePolicy.Limits({
+                perTradeCap: uint128(Fixtures.maxCost()),
+                dailyCap: uint128(Fixtures.maxCost() * 100),
+                biometricThreshold: type(uint128).max,
+                allowed: true
+            })
+        );
+    }
+
+    /// @dev One buy unit per 1e18 sell units, which every fixture order clears. Tests that care
+    ///      about the floor set their own.
+    function _price(address sell, address buy) private {
+        policy.setFloor(sell, buy, 1);
+    }
+
+    /// @dev What a passkey has to sign over: the order, inside the operation carrying it. Binding
+    ///      to the order alone let one approval be replayed for as long as the order stayed valid.
+    function _challenge(GPv2Order.Data memory order) private pure returns (bytes32) {
+        return keccak256(abi.encode(order, keccak256("op")));
+    }
+
+    /// @dev Puts the face out of reach, for the tests that are about the caps rather than the
+    ///      threshold. The threshold is cumulative now, so a loop of trades trips it otherwise.
+    function _noFaceNeeded(address token) private {
+        vm.prank(account);
+        policy.setLimits(
+            token,
+            VoicePolicy.Limits({
+                perTradeCap: PER_TRADE,
+                dailyCap: DAILY,
+                biometricThreshold: type(uint128).max,
+                allowed: true
             })
         );
     }
