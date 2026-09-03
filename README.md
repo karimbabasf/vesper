@@ -32,9 +32,10 @@ description of it. Step 1 ships `vesper.web`.
 
 ## Status
 
-Steps 0 to 4 are done: the venue is verified, a sentence becomes an order, the contracts hold, and
-both the plain path and the passkey path run end to end against the real EntryPoint, the real CoW
-settlement and the real P-256 precompile on Base. Step 5 is the enclave and has not started.
+Steps 0 to 4 are done, on Base mainnet. A spoken sentence becomes an order, the fence lets it
+through, a solver filled one at 2.644387 USDC against a floor of 2.643162, and the same trade above
+the biometric threshold was refused without a passkey and accepted with one. Addresses and
+transactions: [docs/venue.md](docs/venue.md). Step 5 is the enclave and has not started.
 
 ## How to run it
 

@@ -146,3 +146,53 @@ because v1 caps are denominated in token units.
    for it. v0.8 is also live if Kernel's tooling prefers it; v0.6 uses a different struct and would
    change the validator signature, so it is out.
 5. **The gate's digest computation is pinned** to the two constants in section 3.
+
+## Deployed, 2026-09-03
+
+Base mainnet, chain id 8453. One deployment, no redeploys.
+
+| What | Address |
+|---|---|
+| `VoicePolicy` | `0xF1A404923b172fcf51564de48792918017872c0b` |
+| `VesperAccount` | `0x3388Cc66030a6Bd429d39FC701962196523F2348` |
+| owner | `0x109BCe574d54942F7933cA8aDe6829501A48cb12` |
+| session key | `0xAB12FccAd40A7074C379A20D08E51B1044d6Cb0F` |
+
+The account that came before this one, `0x8F54eaF529124254DF304D369ADcE6c84E838747`, was swept
+empty into it by `script/Setup.s.sol` and holds nothing. It was built around a design the deployed
+CoW settlement rejects; see section 3.2 of the spec.
+
+Deploying and configuring cost 0.0000175 ETH between them.
+
+### Configured
+
+| Setting | Value |
+|---|---|
+| WETH per trade | 0.002 ether |
+| WETH per day | 0.005 ether, as a bucket that refills at that rate |
+| WETH face threshold | 0.002 ether, counted across the day rather than per order |
+| ether per operation | 0.00006 |
+| ether per day | 0.002 |
+| floor, WETH for USDC | 1,920,000,000 buy units per 1e18 sell units, about 20 percent under the price on the day |
+| floor, USDC for WETH | 333,333,333,333,333,333,333,333,333 |
+| passkey rpIdHash | `sha256("localhost")`, which is where the console is served from |
+
+### What was proven on chain
+
+| | Transaction |
+|---|---|
+| An order placed through the fence and armed on the settlement | [`0x0657c5d7`](https://basescan.org/tx/0x0657c5d7d747c6e55b436ca92f1a6b65ad3d768111a816fc0ce44aba95dd4167) |
+| The same shape above the threshold, refused for want of a passkey (AA24) | [`0xc16c7d6c`](https://basescan.org/tx/0xc16c7d6c373fd58b43e5badfccacd6ddf1400399c8502af04008c5c56914e525) |
+| The same trade again, accepted with a passkey assertion | [`0xcffdac7b`](https://basescan.org/tx/0xcffdac7b700dc5b10a37cdd8f2f4305100fb5089e3e5cd01d1c0a5a3bf297dcb) |
+| A solver filling it: 0.001098257444300000 WETH for 2.644387 USDC, against a floor of 2.643162 | [`0xbd01d8ba`](https://basescan.org/tx/0xbd01d8ba8ededbe3affc3b0f9616dfeedfcf37e54abcf526113a8b19a513b2f5) |
+| The owner taking an armed order back | [`0x4a76d1ea`](https://basescan.org/tx/0x4a76d1ea37ea343002ab17eb36b624eeaaad7606fa92ab4fdf377f79a0310c9e) |
+
+An operation costs about 230,000 gas. The refusal cost 103,338 and moved nothing.
+
+### The passkey on this account is not a passkey yet
+
+`Setup.s.sol` registers zeroes, which means nothing above the threshold can trade at all. To close
+step 4 on chain a P-256 key was generated into `contracts/.env` and registered, and it signed the
+assertion in `0xcffdac7b`. It sits next to the session key, so on this machine it is not really a
+second factor. **Press "Set up a passkey" in the console to replace it with a real authenticator**;
+that is one transaction and it leaves the session key alone.
