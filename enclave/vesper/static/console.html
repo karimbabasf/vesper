@@ -54,7 +54,7 @@
     transition: border-color 140ms ease;
   }
   input[type=text]::placeholder { color: var(--faint) }
-  input[type=text]:hover { border-color: #2e345a }
+
   :focus-visible { outline: 2px solid var(--star); outline-offset: 2px }
 
   button {
@@ -63,7 +63,7 @@
     background: #1a2039; border: 1px solid var(--rule);
     transition: transform 160ms var(--ease-out), background-color 140ms ease;
   }
-  button:hover { background: #212949 }
+
   button:active { transform: scale(.97) }
   button[disabled] { opacity: .45; cursor: not-allowed; transform: none }
 
@@ -72,7 +72,6 @@
     padding: 5px 10px; border-radius: 20px; font-size: 13px; font-weight: 400;
     color: var(--dim); background: transparent;
   }
-  .examples button:hover { color: var(--text); background: var(--raised) }
 
   /* --- the manifest ---------------------------------------------------------------------- */
 
@@ -138,7 +137,7 @@
     position: relative; overflow: hidden; padding: 13px 22px;
     border-color: #3a3350; background: #1d1a2e; color: var(--star);
   }
-  .hold:hover { background: #241f3a }
+
   .hold .wash {
     position: absolute; inset: 0; background: var(--star);
     clip-path: inset(0 100% 0 0);
@@ -150,6 +149,15 @@
 
   .receipt { margin: 26px 0 0; font: 400 13px/1.7 var(--mono); color: var(--dim) }
   .receipt a { color: var(--star) }
+
+  /* A tap on a touch screen fires hover and leaves it stuck there, so these stay on the pointers
+     that can actually leave an element. */
+  @media (hover: hover) and (pointer: fine) {
+    input[type=text]:hover { border-color: #2e345a }
+    button:hover { background: #212949 }
+    .examples button:hover { color: var(--text); background: var(--raised) }
+    .hold:hover { background: #241f3a }
+  }
 
   @media (max-width: 620px) {
     .hand { grid-template-columns: 1fr; gap: 8px }
