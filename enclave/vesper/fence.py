@@ -24,16 +24,26 @@ class Limits:
     biometric_threshold: int
     remaining_today: int
 
+    @property
+    def spent_today(self) -> int:
+        return self.daily_cap - self.remaining_today
+
     def verdict(self, sell_amount: int) -> tuple[str, str]:
-        """What the fence would say about this amount, and why, in the words it would use."""
+        """What the fence would say about this amount, and why, in the words it would use.
+
+        The threshold is cumulative on chain, so this has to be too. Reading it as "is this one
+        order above the line" told the console no passkey was needed for a trade the contract then
+        refused for want of one, which is the worst kind of preview: confidently wrong in the
+        direction that fails.
+        """
         if not self.allowed:
             return "refused", "this token is not on the allowlist"
         if sell_amount > self.per_trade_cap:
             return "refused", f"over the single trade cap of {self.per_trade_cap}"
         if sell_amount > self.remaining_today:
             return "refused", f"only {self.remaining_today} left in today's budget"
-        if sell_amount > self.biometric_threshold:
-            return "face", "above the threshold, so this one needs a passkey"
+        if self.spent_today + sell_amount > self.biometric_threshold:
+            return "face", "this takes the day past the threshold, so it needs a passkey"
         return "allowed", "inside every limit"
 
 

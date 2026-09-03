@@ -93,3 +93,26 @@ def test_the_order_uid_matches_the_value_solidity_produces():
         "8f54eaf529124254df304d369adce6c84e838747"
         "6b49d200"
     )
+
+
+def test_the_console_asks_for_a_passkey_when_the_chain_would():
+    """The threshold is cumulative on chain, so the preview has to be too.
+
+    Reading it as "is this one order over the line" told the console no passkey was needed for a
+    trade the contract then refused for want of one. A preview that is confidently wrong in the
+    direction that fails is worse than no preview.
+    """
+    from vesper.fence import Limits
+
+    limits = Limits(
+        allowed=True,
+        per_trade_cap=2_000_000_000_000_000,
+        daily_cap=5_000_000_000_000_000,
+        biometric_threshold=2_000_000_000_000_000,
+        remaining_today=4_000_000_000_000_000,  # so a thousandth of an ether is already spent
+    )
+
+    # On its own this is under the threshold. Added to the day, it is not.
+    assert limits.verdict(1_100_000_000_000_000)[0] == "face"
+    # And a small one still is not.
+    assert limits.verdict(100_000_000_000_000)[0] == "allowed"

@@ -210,7 +210,7 @@ def place(request: dict) -> dict:
         uid = chain.order_uid(order, live.account)
         receipt.append(f"uid {uid}")
         receipt.append(
-            "settlement holds the signature" if chain.presigned(uid)
+            "settlement holds the signature" if chain.presigned(uid, expect=True)
             else "settlement does not hold it, so nothing will fill"
         )
     except Exception as error:
@@ -228,7 +228,7 @@ def disarm(request: dict) -> dict:
 
     uid = request["uid"]
     result = chain.cancel(uid, live)
-    still = chain.presigned(uid)
+    still = chain.presigned(uid, expect=False)
     return {
         "ok": not still,
         "receipt": [

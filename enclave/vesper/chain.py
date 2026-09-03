@@ -303,11 +303,17 @@ def register_passkey(x: str, y: str, rp_id_hash: str, deployment: Deployment) ->
     whole record at once, so registering a passkey without carrying the current key across would
     revoke the agent as a side effect.
     """
-    current = cast(
-        "call", deployment.policy,
-        "sessions(address)(address,uint48,bytes32,bytes32,bytes32,bytes32)",
-        deployment.account, "--rpc-url", RPC,
-    ).split()
+    # cast prints one field per line and annotates numbers, as in "1791234567 [1.791e9]", so take
+    # the first token of each line rather than splitting the whole thing on whitespace.
+    current = [
+        line.strip().split()[0]
+        for line in cast(
+            "call", deployment.policy,
+            "sessions(address)(address,uint48,bytes32,bytes32,bytes32,bytes32)",
+            deployment.account, "--rpc-url", RPC,
+        ).splitlines()
+        if line.strip()
+    ]
     key, expiry, attestation = current[0], current[1], current[2]
 
     register = cast(
@@ -339,12 +345,21 @@ def cancel(uid: str, deployment: Deployment) -> dict:
     return json.loads(receipt)
 
 
-def presigned(uid: str) -> bool:
-    """Ask the settlement contract directly. The only answer that counts."""
-    result = cast(
-        "call", SETTLEMENT, "preSignature(bytes)(uint256)", uid, "--rpc-url", RPC
-    )
-    return result.split()[0] != "0"
+def presigned(uid: str, expect: bool | None = None) -> bool:
+    """Ask the settlement contract directly. The only answer that counts.
+
+    `expect` says what the caller just did, and is worth passing straight after a write. A public
+    RPC endpoint is several machines, and one of them can answer from a block that does not have
+    your transaction in it yet; a disarm that had certainly landed read back as still armed once.
+    Retrying only while the answer disagrees with what you did costs nothing when it agrees.
+    """
+    for attempt in range(4):
+        result = cast("call", SETTLEMENT, "preSignature(bytes)(uint256)", uid, "--rpc-url", RPC)
+        armed = result.split()[0] != "0"
+        if expect is None or armed == expect or attempt == 3:
+            return armed
+        time.sleep(1.5)
+    return armed
 
 
 def order_uid(order: dict, account: str) -> str:
